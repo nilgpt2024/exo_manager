@@ -4157,10 +4157,25 @@
                 }
                 
                 loadedModelsCache = modelsArray;
-                
-                let html = '<div style="display:flex; flex-direction:column; gap:0.75rem;">';
-                
+
+                // 按 model_id 分组，每个模型只显示第一个实例的详情
+                const modelGroups = {};
                 modelsArray.forEach(model => {
+                    const mid = model.model_id;
+                    if (!modelGroups[mid]) {
+                        modelGroups[mid] = [];
+                    }
+                    modelGroups[mid].push(model);
+                });
+
+                let html = '<div style="display:flex; flex-direction:column; gap:0.75rem;">';
+
+                Object.keys(modelGroups).forEach(modelId => {
+                    const instances = modelGroups[modelId];
+                    // 只取第一个实例显示详情
+                    const model = instances[0];
+                    const instanceCount = instances.length;
+                    
                     const nodeId = model.node_id || 'unknown';
                     const shardInfo = model.shard_info || model.shard || {};
                     const startLayer = shardInfo.start_layer;
@@ -4173,6 +4188,13 @@
                     const layerText = hasShard ? `L${startLayer}-${endLayer} / ${nLayers}层` : '已加载';
                     const barLeft = hasShard ? (startLayer / nLayers * 100) : 0;
                     const barWidth = hasShard ? ((endLayer - startLayer + 1) / nLayers * 100) : 100;
+
+                    // 多实例时显示额外标签
+                    const multiInstanceBadge = instanceCount > 1 
+                        ? `<span class="badge" style="background:#f59e0b; color:white; margin-left:0.5rem; font-size:0.7rem;" title="共 ${instanceCount} 个实例分布在不同节点">
+                               <i class="fas fa-clone"></i> ${instanceCount}节点
+                           </span>` 
+                        : '';
                     
                     html += `
                         <div class="model-card" style="
@@ -4186,12 +4208,13 @@
                                 <div>
                                     <h4 style="font-size:1rem; color:var(--gray-800); margin-bottom:0.25rem;">
                                         <i class="fas fa-cube" style="color:var(--primary);"></i>
-                                        ${escapeHtml(model.model_id)}
+                                        ${escapeHtml(modelId)}
                                         <span class="badge" style="background:#3b82f6; color:white; margin-left:0.5rem; font-size:0.7rem; cursor:pointer;" 
-                                              onclick="refreshInstancesList('${escapeHtml(model.model_id)}')"
+                                              onclick="refreshInstancesList('${escapeHtml(modelId)}')"
                                               title="点击查看/刷新实例列表">
                                             <i class="fas fa-clone"></i> 实例
                                         </span>
+                                        ${multiInstanceBadge}
                                     </h4>
                                     <div style="display:flex; gap:1rem; font-size:0.82rem; color:var(--gray-600); flex-wrap:wrap;">
                                         <span><i class="fas fa-server"></i> ${escapeHtml(shortNodeId)}</span>
@@ -4199,15 +4222,15 @@
                                     </div>
                                 </div>
                                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
-                                    <button onclick="showInstancesPanel('${escapeHtml(model.model_id)}')" 
+                                    <button onclick="showInstancesPanel('${escapeHtml(modelId)}')" 
                                             class="btn btn-outline btn-sm" style="border-color:#3b82f6; color:#3b82f6;" title="管理实例">
                                         <i class="fas fa-clone"></i>
                                     </button>
-                                    <button onclick="rebalanceModel('${escapeHtml(model.model_id)}')" 
+                                    <button onclick="rebalanceModel('${escapeHtml(modelId)}')" 
                                             class="btn btn-outline btn-sm" title="重新平衡">
                                         <i class="fas fa-balance-scale-right"></i>
                                     </button>
-                                    <button onclick="unloadAllInstances('${escapeHtml(model.model_id)}')" 
+                                    <button onclick="unloadAllInstances('${escapeHtml(modelId)}')" 
                                             class="btn btn-sm" style="background:#dc2626; color:white;" title="卸载所有实例">
                                         <i class="fas fa-trash-alt"></i>
                                     </button>
@@ -4229,7 +4252,7 @@
                             </div>
                             
                             <!-- 实例列表 (可展开) -->
-                            <div id="instancesContainer_${model.model_id.replace(/[^a-zA-Z0-9]/g, '_')}" 
+                            <div id="instancesContainer_${modelId.replace(/[^a-zA-Z0-9]/g, '_')}" 
                                  style="margin-top:0.75rem; display:none;"></div>
                         </div>
                     `;
