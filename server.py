@@ -620,13 +620,51 @@ async def health_check_node(node_id: str, request: Request):
         raise HTTPException(status_code=503, detail="服务未初始化")
     
     connector = manager.connectors.get(node_id)
-    
-    if not connector:
-        raise HTTPException(status_code=404, detail=f"节点 {node_id} 不存在")
-    
-    # ✅ 解析 Node 上报的状态数据
+
+    # ✅ 先读取 body（只读一次，后续复用）
+    raw_body = b""
     try:
-        heartbeat_data = await request.json()
+        raw_body = await request.body()
+    except Exception:
+        pass
+
+    if not connector:
+        # Server 重启后节点丢失，通过心跳自动重新注册
+        logger.info(f"[Heartbeat] 节点 {node_id} 不存在（可能 Server 重启），尝试自动重新注册...")
+        try:
+            reg_device_info = {}
+            if raw_body:
+                try:
+                    hb_data = json.loads(raw_body)
+                    if "gpu_memory" in hb_data:
+                        reg_device_info["memory_detail"] = hb_data["gpu_memory"]
+                except Exception:
+                    pass
+
+            reg_success = await manager.add_node(
+                node_id=node_id,
+                address="127.0.0.1",
+                port=50051,
+                chatgpt_api_port=52415,
+                device_info=reg_device_info or {}
+            )
+
+            if reg_success:
+                logger.info(f"[Heartbeat] 节点 {node_id} 自动注册成功")
+                connector = manager.connectors.get(node_id)
+            else:
+                logger.warning(f"[Heartbeat] 节点 {node_id} 自动注册失败")
+                raise HTTPException(status_code=503, detail=f"节点 {node_id} 重新注册失败，请手动添加")
+
+        except HTTPException:
+            raise
+        except Exception as reg_err:
+            logger.error(f"[Heartbeat] 节点 {node_id} 自动注册异常: {reg_err}")
+            raise HTTPException(status_code=503, detail=f"节点 {node_id} 不存在且自动注册失败: {reg_err}")
+    
+    # ✅ 解析 Node 上报的状态数据（复用已读取的 body）
+    try:
+        heartbeat_data = json.loads(raw_body) if raw_body else {}
         
         # 更新已加载模型列表
         if "loaded_models" in heartbeat_data:
@@ -671,15 +709,18 @@ async def health_check_node(node_id: str, request: Request):
     
     except Exception as e:
         error_msg = str(e)
-        logger.warning(f"⚠️ [Heartbeat] 解析节点 {node_id} 心跳数据失败: {error_msg}")
         
-        # 如果是 JSON 解析错误（节点发送了空数据或崩溃），返回错误
+        # JSON 解析错误（空 body 或非法数据）→ 容错处理，视为无状态数据的纯心跳
         if "Expecting value" in error_msg or "JSON" in error_msg.upper():
-            # 标记节点为异常状态
+            logger.debug(f"[Heartbeat] 节点 {node_id} 心跳 body 为空，跳过状态解析，继续保活")
+            # 不标记为 ERROR，直接走后续的 health_check 保活逻辑
+            heartbeat_data = {}
+        else:
+            logger.warning(f"⚠️ [Heartbeat] 解析节点 {node_id} 心跳数据失败: {error_msg}")
             if node_id in manager.nodes:
                 manager.nodes[node_id].status = NodeStatus.ERROR
                 manager.nodes[node_id].error_message = f"心跳数据解析失败: {error_msg}"
-                manager.nodes[node_id].last_heartbeat = time.time()  # 更新时间戳避免重复超时标记
+                manager.nodes[node_id].last_heartbeat = time.time()
             
             return {
                 "success": False,
