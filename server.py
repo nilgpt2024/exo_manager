@@ -695,23 +695,26 @@ async def health_check_node(node_id: str, request: Request):
     is_healthy = await connector.health_check()
     node_info = manager.nodes[node_id]
 
-    # 心跳成功时恢复离线节点的在线状态
-    if is_healthy and node_info.status == NodeStatus.OFFLINE:
-        old_status = node_info.status.value
-        node_info.status = NodeStatus.ONLINE
-        node_info.error_message = ""
+    if is_healthy:
+        # 始终更新心跳时间戳，避免心跳监控误判为离线
         node_info.last_heartbeat = time.time()
-        logger.info(f"💓 [Heartbeat] 节点 {node_id} 心跳恢复: {old_status} → online")
 
-        try:
-            await ws_manager.broadcast({
-                "type": "node_status_changed",
-                "node_id": node_id,
-                "status": "online",
-                "timestamp": time.time()
-            })
-        except Exception as e:
-            logger.debug(f"广播状态变化失败: {e}")
+        # 心跳成功时恢复离线节点的在线状态
+        if node_info.status == NodeStatus.OFFLINE:
+            old_status = node_info.status.value
+            node_info.status = NodeStatus.ONLINE
+            node_info.error_message = ""
+            logger.info(f"💓 [Heartbeat] 节点 {node_id} 心跳恢复: {old_status} → online")
+
+            try:
+                await ws_manager.broadcast({
+                    "type": "node_status_changed",
+                    "node_id": node_id,
+                    "status": "online",
+                    "timestamp": time.time()
+                })
+            except Exception as e:
+                logger.debug(f"广播状态变化失败: {e}")
     
     # ✨ 获取该节点的待处理任务
     pending_tasks = []
