@@ -1,0 +1,2117 @@
+"""
+EXO Cluster Manager - 核心服务
+==============================
+
+独立的EXO集群管理系统，提供：
+- RESTful API用于节点和模型管理
+- Web界面用于可视化操作
+- 实时监控和GPU池统一管理
+
+启动方式:
+    python -m exo_manager.server --port 8080
+    
+访问:
+    http://localhost:8080
+
+架构说明:
+---------
+1. 通过读取network_config.json或手动添加来连接EXO节点
+2. 使用gRPC协议与各节点通信
+3. 提供REST API供前端调用
+4. 支持WebSocket实时推送状态更新
+"""
+
+import asyncio
+import json
+import logging
+import os
+import sys
+import time
+import uuid
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+from pathlib import Path
+
+# 导入 Node WebSocket 管理器（用于实时推送任务）
+# ✨ 使用延迟导入避免循环依赖问题
+_node_ws_manager_instance = None
+_ws_import_attempted = False
+
+def _get_node_ws_manager():
+    """延迟获取 node_ws_manager 实例"""
+    global _node_ws_manager_instance, _ws_import_attempted
+    
+    if _node_ws_manager_instance is not None:
+        return _node_ws_manager_instance
+    
+    if _ws_import_attempted:
+        return None  # 已经尝试过并失败，不再重试
+    
+    _ws_import_attempted = True
+    try:
+        from server import node_ws_manager
+        _node_ws_manager_instance = node_ws_manager
+        logger.info("✅ [WS] node_ws_manager 导入成功")
+        return _node_ws_manager_instance
+    except ImportError as e:
+        logger.warning(f"⚠️ [WS] node_ws_manager 导入失败: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"❌ [WS] node_ws_manager 导入异常: {e}")
+        return None
+
+def _is_ws_available():
+    """检查 WS 是否可用"""
+    return _get_node_ws_manager() is not None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+# 确保当前文件所在目录和父目录都在sys.path中（支持 -m 模式和直接运行）
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
+
+_parent_dir = os.path.dirname(_current_dir)
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+class NodeStatus(Enum):
+    """节点连接状态"""
+    ONLINE = "online"
+    OFFLINE = "offline"
+    CONNECTING = "connecting"
+    ERROR = "error"
+
+
+@dataclass
+class EXONodeInfo:
+    """EXO节点的信息（从Manager视角）"""
+    node_id: str
+    address: str
+    port: int  # gRPC 端口
+    chatgpt_api_port: int = 52415  # ChatGPT API 端口（HTTP）
+    status: NodeStatus = NodeStatus.CONNECTING
+    device_info: Dict[str, Any] = field(default_factory=dict)
+    loaded_models: List[Dict[str, Any]] = field(default_factory=list)
+    last_heartbeat: float = 0
+    error_message: str = ""
+    response_time_ms: float = 0
+    
+    @property
+    def chatgpt_url(self) -> str:
+        return f"http://{self.address}:{self.chatgpt_api_port}"
+    
+    @property
+    def chat_completions_url(self) -> str:
+        return f"{self.chatgpt_url}/v1/chat/completions"
+    
+    def to_dict(self) -> dict:
+        return {
+            "node_id": self.node_id,
+            "address": self.address,
+            "port": self.port,
+            "chatgpt_api_port": self.chatgpt_api_port,
+            "status": self.status.value,
+            "device_info": self.device_info,
+            "loaded_models": self.loaded_models,
+            "last_heartbeat": self.last_heartbeat,
+            "error_message": self.error_message,
+            "response_time_ms": round(self.response_time_ms, 2)
+        }
+
+
+class NodeConnector:
+    """
+    节点连接器 - 管理与单个EXO节点的gRPC连接
+    
+    负责建立连接、健康检查、收集信息等
+    """
+    
+    def __init__(self, node_info: EXONodeInfo, manager=None):
+        self.node_info = node_info
+        self.channel = None
+        self.stub = None
+        self._lock = asyncio.Lock()
+        self._manager_ref = manager  # 用于备用数据源查询
+        
+    async def connect(self) -> bool:
+        """建立gRPC连接并获取设备信息"""
+        try:
+            import grpc
+            
+            address = f"{self.node_info.address}:{self.node_info.port}"
+            logger.info(f"🔌 正在连接节点 {self.node_info.node_id} @ {address}...")
+            
+            self.channel = grpc.aio.insecure_channel(
+                address,
+                options=[
+                    ("grpc.max_receive_message_length", 256 * 1024 * 1024),
+                    ("grpc.max_send_message_length", 256 * 1024 * 1024),
+                    ("grpc.keepalive_time_ms", 10000),
+                    ("grpc.keepalive_timeout_ms", 60000),
+                ]
+            )
+            
+            # 尝试导入gRPC stub
+            try:
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
+                from node_service_pb2_grpc import NodeServiceStub
+                from node_service_pb2 import CollectTopologyRequest
+                self.stub = NodeServiceStub(self.channel)
+            except ImportError:
+                logger.warning(f"无法导入gRPC stub，使用简化模式")
+                return await self._connect_simple()
+            
+            # 等待连接就绪
+            await asyncio.wait_for(self.channel.channel_ready(), timeout=10.0)
+            
+            self.node_info.status = NodeStatus.ONLINE
+            self.node_info.last_heartbeat = time.time()
+            logger.info(f"✅ 成功连接到节点 {self.node_info.node_id}@{address}")
+            
+            # 获取节点设备信息（非关键操作，失败不影响连接）
+            try:
+                await self._fetch_device_info()
+            except Exception as e:
+                logger.warning(f"⚠️ 获取节点 {self.node_info.node_id} 设备信息失败: {e}")
+            
+            return True
+            
+        except Exception as e:
+            self.node_info.status = NodeStatus.ERROR
+            self.node_info.error_message = str(e)
+            import traceback
+            logger.error(f"❌ 连接节点 {self.node_info.node_id} 失败: {type(e).__name__}: {e}")
+            if "refused" in str(e).lower() or "connection" in str(e).lower():
+                logger.error(f"   请确认: 1) 节点正在运行 2) 端口 {self.port} 正确 3) 防火墙允许连接")
+            elif "timeout" in str(e).lower():
+                logger.error(f"   连接超时，请检查网络连通性")
+            logger.debug(f"   详细堆栈: {traceback.format_exc()}")
+            return False
+    
+    async def _fetch_device_info(self):
+        """通过CollectTopology获取节点的设备信息"""
+        if not self.stub:
+            return
+        
+        try:
+            import sys
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
+            from node_service_pb2 import CollectTopologyRequest
+            
+            request = CollectTopologyRequest(max_depth=0, visited=[])
+            response = await asyncio.wait_for(
+                self.stub.CollectTopology(request),
+                timeout=10.0
+            )
+            
+            # 解析拓扑响应，提取当前节点的设备信息
+            device_caps = None
+            if response.nodes and self.node_info.node_id in response.nodes:
+                device_caps = response.nodes[self.node_info.node_id]
+            elif response.nodes:
+                first_node_id = list(response.nodes.keys())[0]
+                device_caps = response.nodes[first_node_id]
+            
+            if device_caps:
+                # 获取最新的显存数据（来自 pynvml 实时数据）
+                new_memory_detail = None
+                if device_caps.memory_detail and hasattr(device_caps.memory_detail, 'total'):
+                    new_memory_detail = {
+                        "total": device_caps.memory_detail.total,
+                        "free": device_caps.memory_detail.free,
+                        "used": device_caps.memory_detail.used,
+                    }
+                
+                # memory fallback: 静态值为0但pynvml有数据时使用 realtime total
+                effective_memory = device_caps.memory
+                if (effective_memory == 0 or effective_memory is None) and new_memory_detail and new_memory_detail.get("total", 0) > 0:
+                    effective_memory = new_memory_detail["total"]
+                    logger.info(f"   [Fallback] memory=0, 使用 pynvml total={effective_memory}MB")
+                
+                # chip fallback
+                raw_chip = device_caps.chip or ""
+                if raw_chip in ("Unknown Chip", "unknown", "Unknown", ""):
+                    if new_memory_detail and new_memory_detail.get("total", 0) > 100:
+                        raw_chip = "GPU"
+                    else:
+                        raw_chip = "Unknown"
+                
+                # 构建新的设备信息（只更新基础字段）
+                new_device_info = {
+                    "model": device_caps.model or "Unknown",
+                    "chip": raw_chip,
+                    "memory": effective_memory,
+                    "flops": {
+                        "fp32": device_caps.flops.fp32,
+                        "fp16": device_caps.flops.fp16,
+                        "int8": device_caps.flops.int8,
+                    } if device_caps.flops else {},
+                }
+                
+                # 保留已有的 loaded_models 和其他动态数据
+                preserved_data = {}
+                if self.node_info.device_info:
+                    # 保留已加载模型列表（由 _fetch_loaded_models 更新）
+                    if self.node_info.device_info.get('loaded_models'):
+                        preserved_data['loaded_models'] = self.node_info.device_info['loaded_models']
+                
+                # 合并数据：基础信息 + 保留的动态数据 + 最新显存
+                self.node_info.device_info = {**new_device_info, **preserved_data}
+                
+                # 更新显存数据（如果获取到了新的）
+                if new_memory_detail:
+                    self.node_info.device_info['memory_detail'] = new_memory_detail
+                elif 'memory_detail' not in self.node_info.device_info:
+                    # 如果没有新数据且之前也没有，设为 None
+                    self.node_info.device_info['memory_detail'] = None
+                
+                logger.info(f"📊 获取到节点 {self.node_info.node_id} 设备信息: "
+                           f"{self.node_info.device_info.get('chip')} / "
+                           f"{self.node_info.device_info.get('memory')}MB")
+                if new_memory_detail:
+                    logger.info(f"   显存: {new_memory_detail['used']}/{new_memory_detail['total']} MB")
+                    logger.info(f"📊 获取到节点设备信息 (fallback): {self.node_info.device_info}")
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ 获取节点 {self.node_info.node_id} 设备信息失败: {e}")
+            # ✅ 保留原有数据，只标记错误（不覆盖完整信息）
+            if not self.node_info.device_info:
+                self.node_info.device_info = {}
+            # 只在原有数据不完整时才添加 error 标记
+            required_fields = ["model", "chip", "memory"]
+            has_basic_info = all(field in self.node_info.device_info for field in required_fields)
+            if not has_basic_info:
+                self.node_info.device_info["error"] = str(e)
+                self.node_info.device_info["model"] = "Unknown Device"
+                self.node_info.device_info["chip"] = "Unknown Chip"
+                self.node_info.device_info["memory"] = 0
+                self.node_info.device_info["flops"] = {"fp32": 0, "fp16": 0, "int8": 0}
+            logger.debug(f"   使用基础/缓存的设备信息: {self.node_info.device_info}")
+    
+    async def _connect_simple(self) -> bool:
+        """简化的连接模式（当gRPC stub不可用时）"""
+        try:
+            if self.channel:
+                await asyncio.wait_for(self.channel.channel_ready(), timeout=5.0)
+                self.node_info.status = NodeStatus.ONLINE
+                return True
+        except:
+            pass
+        
+        # 即使无法完全验证，也标记为在线（假设端口可达）
+        self.node_info.status = NodeStatus.ONLINE
+        return True
+    
+    async def _fetch_loaded_models(self):
+        """从节点获取已加载的模型列表和实时GPU显存"""
+        if not self.stub:
+            return
+        
+        try:
+            import sys
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
+            from node_service_pb2 import CollectTopologyRequest
+            
+            request = CollectTopologyRequest(max_depth=0, visited=[])
+            response = await asyncio.wait_for(
+                self.stub.CollectTopology(request),
+                timeout=10.0
+            )
+            
+            # 调试：打印返回的所有节点 ID
+            logger.info(f"🔍 [DEBUG] CollectTopology 返回节点: {list(response.nodes.keys())}")
+            logger.info(f"🔍 [DEBUG] 当前 node_info.node_id: {self.node_info.node_id}")
+            
+            # 从拓扑响应中提取节点状态信息
+            if response.nodes:
+                # 尝试多种方式匹配节点
+                device_caps = None
+                
+                # 方式1: 精确匹配
+                if self.node_info.node_id in response.nodes:
+                    device_caps = response.nodes[self.node_info.node_id]
+                    logger.info(f"✅ [DEBUG] 精确匹配到节点: {self.node_info.node_id}")
+                else:
+                    # 方式2: 取第一个（可能是自身）
+                    first_node_id = list(response.nodes.keys())[0]
+                    device_caps = response.nodes[first_node_id]
+                    logger.warning(f"⚠️ [DEBUG] 未精确匹配，使用第一个节点: {first_node_id}")
+                
+                if device_caps:
+                    # 1. 更新显存使用情况
+                    if hasattr(device_caps, 'memory_detail') and device_caps.memory_detail:
+                        new_total = getattr(device_caps.memory_detail, 'total', 0)
+                        new_free = getattr(device_caps.memory_detail, 'free', 0)
+                        new_used = getattr(device_caps.memory_detail, 'used', 0)
+                        
+                        old_memory = self.node_info.device_info.get('memory_detail', {})
+                        
+                        self.node_info.device_info['memory_detail'] = {
+                            "total": new_total,
+                            "free": new_free,
+                            "used": new_used,
+                        }
+                        
+                        logger.info(f"📊 [显存更新] 节点 {self.node_info.node_id}: "
+                                   f"{new_used}/{new_total} MB "
+                                   f"(旧值: {old_memory.get('used', '?')}/{old_memory.get('total', '?')} MB)")
+                    
+                    # 2. 更新已加载模型列表（智能合并不覆盖）
+                    # 🔧 修复：即使 loaded_models 为空数组也要处理，避免数据不一致
+                    
+                    # 🔍 调试：打印 gRPC 返回的原始 loaded_models 数据
+                    raw_loaded_models = getattr(device_caps, 'loaded_models', None)
+                    logger.info(f"🔍 [DEBUG] gRPC 返回 loaded_models: "
+                               f"类型={type(raw_loaded_models)}, "
+                               f"长度={len(raw_loaded_models) if raw_loaded_models else 0}, "
+                               f"值={raw_loaded_models if raw_loaded_models else 'None/空'}")
+                    
+                    if raw_loaded_models is not None:
+                        new_loaded_models = []
+                        
+                        # 从节点获取的模型ID集合（用于去重）
+                        node_model_ids = set()
+                        seen_new_model_ids = set()
+                        
+                        for model_info in raw_loaded_models:
+                            if model_info.model_id in seen_new_model_ids:
+                                logger.debug(f"⚠️ 跳过重复模型: {model_info.model_id}")
+                                continue
+                            seen_new_model_ids.add(model_info.model_id)
+                            node_model_ids.add(model_info.model_id)
+                            model_entry = {
+                                "model_id": model_info.model_id,
+                                "shard": {
+                                    "start_layer": model_info.start_layer,
+                                    "end_layer": model_info.end_layer,
+                                    "n_layers": model_info.n_layers,
+                                }
+                            }
+                            new_loaded_models.append(model_entry)
+                        
+                        # ✅ 修复：智能合并时避免重复（基于 model_id 去重）
+                        local_multi_instance_models = []
+                        seen_multi_ids = set()
+                        
+        # 获取新数据中的所有 model_id（用于判断是否需要补充）
+                        new_model_ids_set = set(m["model_id"] for m in new_loaded_models)
+                        
+                        for existing_model in self.node_info.loaded_models:
+                            existing_id = existing_model.get("model_id", "")
+                            
+                            if "::" in existing_id:
+                                # ✅ 关键修复：只在本地记录不在新数据中时才补充
+                                if existing_id in seen_multi_ids or existing_id in new_model_ids_set:
+                                    logger.debug(f"⏭️ 跳过已存在的多实例: {existing_id}")
+                                    continue
+                                    
+                                seen_multi_ids.add(existing_id)
+                                base_id = existing_id.split("::")[0]
+                                
+                                # 只在基础模型匹配且实例ID确实不存在时才保留
+                                if base_id in node_model_ids or any(
+                                    nm.startswith(base_id) for nm in node_model_ids
+                                ):
+                                    local_multi_instance_models.append(existing_model)
+                                    logger.debug(f"🔒 补充本地多实例记录: {existing_id}")
+                        
+                        
+                        # 合并：节点的数据 + 本地的多实例记录
+                        merged_models = new_loaded_models + local_multi_instance_models
+                        
+                        old_models = self.node_info.loaded_models
+                        self.node_info.loaded_models = merged_models
+                        
+                        all_model_ids = [m["model_id"] for m in merged_models]
+                        logger.info(f"📦 [模型更新] 节点 {self.node_info.node_id}: "
+                                   f"加载了 {len(merged_models)} 个模型 - {all_model_ids} "
+                                   f"(旧值: {[m.get('model_id','?') for m in old_models]})")
+                        
+                        if len(local_multi_instance_models) > 0:
+                            logger.info(f"   ✅ 保留了 {len(local_multi_instance_models)} 个本地多实例记录")
+                    else:
+                        # gRPC 未返回 loaded_models 字段（保持原有数据不变）
+                        logger.warning(f"⚠️ [模型更新] gRPC 未返回 loaded_models 字段，保持原有数据")
+                    
+                    # 🔧 新增：智能推断 - 当 loaded_models 为空但显存被占用时
+                    if len(self.node_info.loaded_models) == 0:
+                        mem_detail = self.node_info.device_info.get('memory_detail', {})
+                        used_mem = mem_detail.get('used', 0)
+                        
+                        if used_mem > 500:  # > 500MB 说明有模型在运行
+                            logger.warning(
+                                f"⚠️ [数据不一致] 节点 {self.node_info.node_id}: "
+                                f"loaded_models 为空，但显存使用 {used_mem}MB！"
+                                f"\n   可能原因:"
+                                f"\n   1. 模型通过非 Manager 途径加载（如命令行直接启动）"
+                                f"\n   2. exo 节点的 my_loaded_models 未正确更新"
+                                f"\n   3. gRPC CollectTopology 未包含完整模型信息"
+                                f"\n\n   💡 建议检查 exo 节点日志中的 'on_model_loaded' 调用"
+                            )
+                            
+                            # 尝试从 manager 的全局模型注册表补充
+                            if hasattr(self, '_manager_ref') and self._manager_ref:
+                                try:
+                                    global_models = getattr(self._manager_ref, '_global_model_registry', None)
+                                    if global_models:
+                                        node_models = []
+                                        for model_id, model_info in global_models.items():
+                                            if model_info.get('node_id') == self.node_info.node_id:
+                                                node_models.append({
+                                                    "model_id": model_id,
+                                                    "shard": model_info.get('shard', {}),
+                                                    "source": "global_registry_fallback"
+                                                })
+                                        
+                                        if node_models:
+                                            self.node_info.loaded_models = node_models
+                                            logger.info(
+                                                f"✅ [备用数据源] 从全局注册表补充了 "
+                                                f"{len(node_models)} 个模型: "
+                                                f"{[m['model_id'] for m in node_models]}"
+                                            )
+                                except Exception as e:
+                                    logger.debug(f"备用数据源查询失败: {e}")
+            
+        except Exception as e:
+            logger.error(f"❌ 获取节点 {self.node_info.node_id} 模型信息失败: {e}")
+    
+    async def disconnect(self):
+        """断开连接"""
+        if self.channel:
+            await self.channel.close()
+            self.channel = None
+            self.stub = None
+        self.node_info.status = NodeStatus.OFFLINE
+        logger.info(f"🔌 已断开节点 {self.node_info.node_id}")
+    
+    async def health_check(self) -> bool:
+        """执行健康检查"""
+        start_time = time.time()
+        
+        try:
+            if not self.stub:
+                return False
+            
+            # 使用正确的 protobuf 请求类型
+            try:
+                import sys
+                import os
+                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
+                from node_service_pb2 import HealthCheckRequest
+                request = HealthCheckRequest()
+            except ImportError:
+                # 如果无法导入，使用空字典作为fallback（某些gRPC版本支持）
+                request = {}
+            
+            response = await asyncio.wait_for(
+                self.stub.HealthCheck(request),
+                timeout=5.0
+            )
+            
+            self.node_info.response_time_ms = (time.time() - start_time) * 1000
+            self.node_info.last_heartbeat = time.time()
+            self.node_info.status = NodeStatus.ONLINE
+            self.node_info.error_message = ""
+            
+            return True
+            
+        except Exception as e:
+            self.node_info.response_time_ms = (time.time() - start_time) * 1000
+            self.node_info.status = NodeStatus.ERROR
+            self.node_info.error_message = f"Health check failed: {str(e)}"
+            return False
+    
+    async def get_status(self) -> Optional[Dict]:
+        """获取节点详细状态"""
+        if not self.stub or self.node_info.status != NodeStatus.ONLINE:
+            return None
+        
+        try:
+            # 这里可以扩展为调用实际的gRPC方法获取详细信息
+            # 目前返回基本信息
+            return {
+                "node_id": self.node_info.node_id,
+                "status": self.node_info.status.value,
+                "uptime": time.time() - self.node_info.last_heartbeat if self.node_info.last_heartbeat else 0,
+                "response_time_ms": self.node_info.response_time_ms
+            }
+        except Exception as e:
+            logger.error(f"获取节点状态失败: {e}")
+            return None
+    
+    async def send_shard_config(
+        self,
+        model_id: str,
+        model_path: str,
+        start_layer: int,
+        end_layer: int,
+        n_layers: int,
+        peer_list: Optional[List[Dict]] = None
+    ) -> Dict:
+        """
+        向节点发送分片配置（加载模型权重）
+        
+        优先使用 gRPC SendOpaqueStatus 接口，
+        如果 gRPC 不可用（如 FRP 代理场景），自动 fallback 到 HTTP API。
+        
+        Args:
+            model_id: 模型ID
+            model_path: 模型路径
+            start_layer: 起始层
+            end_layer: 结束层
+            n_layers: 总层数
+            
+        Returns:
+            发送结果
+        """
+        
+        shard_payload = {
+            "model_id": model_id,
+            "base_model_id": model_id.split("::")[0] if "::" in model_id else model_id,
+            "instance_id": model_id.split("::")[1] if "::" in model_id else "default",
+            "model_path": model_path,
+            "shard": {
+                "start_layer": start_layer,
+                "end_layer": end_layer,
+                "n_layers": n_layers
+            },
+            "peer_list": peer_list or [],
+            "timestamp": time.time()
+        }
+        
+        logger.info(f"📤 发送分片配置到节点 {self.node_info.node_id}:")
+        logger.info(f"   model_id: {model_id}")
+        logger.info(f"   model_path: {model_path}")
+        logger.info(f"   layers: {start_layer}-{end_layer}/{n_layers}")
+        
+        # 方式1: 尝试 gRPC（直连模式）
+        if self.stub:
+            try:
+                result = await self._send_shard_via_grpc(shard_payload)
+                if result["success"]:
+                    return result
+                logger.warning(f"gRPC 发送失败，尝试 HTTP fallback...")
+            except Exception as e:
+                logger.warning(f"gRPC 不可用 ({e})，切换到 HTTP fallback...")
+        
+        # 方式2: HTTP Fallback（FRP/代理模式）
+        try:
+            result = await self._send_shard_via_http(shard_payload)
+            if result["success"]:
+                return result
+            logger.error(f"HTTP fallback 也失败")
+            return result
+        except Exception as e:
+            logger.error(f"❌ 所有发送方式均失败 ({self.node_info.node_id}): {e}")
+            return {
+                "success": False,
+                "node_id": self.node_info.node_id,
+                "error": f"gRPC 和 HTTP 均不可用: {str(e)}"
+            }
+    
+    async def _send_shard_via_grpc(self, shard_payload: Dict) -> Dict:
+        """通过 gRPC SendOpaqueStatus 发送分片配置"""
+        try:
+            import sys
+            import os
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
+            from node_service_pb2 import SendOpaqueStatusRequest
+            
+            shard_config = json.dumps({
+                **shard_payload,
+                "type": "manager_shard_config",
+                "requester": "exo_manager"
+            })
+            
+            request = SendOpaqueStatusRequest(
+                request_id=f"load_{shard_payload['model_id']}_{shard_payload['shard']['start_layer']}_{shard_payload['shard']['end_layer']}_{int(time.time())}",
+                status=shard_config
+            )
+            
+            response = await asyncio.wait_for(
+                self.stub.SendOpaqueStatus(request),
+                timeout=30.0
+            )
+            
+            self._update_loaded_models(shard_payload)
+            
+            logger.info(f"✅ [gRPC] 已向节点 {self.node_info.node_id} 发送分片配置")
+            
+            return {
+                "success": True,
+                "node_id": self.node_info.node_id,
+                "model_id": shard_payload["model_id"],
+                "shard": shard_payload["shard"],
+                "method": "grpc",
+                "message": "分片配置已发送 (gRPC)"
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ [gRPC] 发送分片配置失败: {e}")
+            raise
+    
+    async def _send_shard_via_http(self, shard_payload: Dict) -> Dict:
+        """通过 HTTP API 发送分片配置（FRP Fallback）"""
+        try:
+            import aiohttp
+            
+            http_url = f"{self.node_info.chatgpt_url}/v1/manager/shard-config"
+            
+            logger.info(f"📡 [HTTP] 尝试通过 HTTP 发送分片配置到 {http_url}")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    http_url,
+                    json=shard_payload,
+                    timeout=aiohttp.ClientTimeout(total=30.0)
+                ) as resp:
+                    if resp.status == 200:
+                        result = await resp.json()
+                        if result.get("success"):
+                            self._update_loaded_models(shard_payload)
+                            
+                            logger.info(f"✅ [HTTP] 已向节点 {self.node_info.node_id} 发送分片配置")
+                            
+                            return {
+                                "success": True,
+                                "node_id": self.node_info.node_id,
+                                "model_id": shard_payload["model_id"],
+                                "shard": shard_payload["shard"],
+                                "method": "http",
+                                "message": "分片配置已发送 (HTTP Fallback)"
+                            }
+                        else:
+                            return {
+                                "success": False,
+                                "node_id": self.node_info.node_id,
+                                "error": result.get("error", "节点返回错误"),
+                                "method": "http"
+                            }
+                    else:
+                        error_text = await resp.text()
+                        return {
+                            "success": False,
+                            "node_id": self.node_info.node_id,
+                            "error": f"HTTP {resp.status}: {error_text[:200]}",
+                            "method": "http"
+                        }
+                        
+        except Exception as e:
+            logger.error(f"❌ [HTTP] 发送分片配置失败: {e}")
+            raise
+    
+    def _update_loaded_models(self, shard_payload: Dict):
+        """更新本地缓存的已加载模型列表"""
+        shard_info = {
+            "model_id": shard_payload["model_id"],
+            "shard": shard_payload["shard"],
+            "loaded_at": time.time()
+        }
+        
+        existing_models = [m for m in self.node_info.loaded_models 
+                         if m.get("model_id") != shard_payload["model_id"]]
+        existing_models.append(shard_info)
+        self.node_info.loaded_models = existing_models
+    
+    async def send_unload_command(self, model_id: str, unload_all_instances: bool = False) -> Dict:
+        """
+        向节点发送卸载模型命令
+
+        Args:
+            model_id: 要卸载的模型ID
+            unload_all_instances: 是否卸载该模型的所有实例
+
+        Returns:
+            卸载结果
+        """
+        if not self.stub:
+            return {"success": False, "error": "gRPC stub 未初始化"}
+
+        try:
+            import sys
+            import os
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
+            from node_service_pb2 import SendOpaqueStatusRequest
+
+            unload_command = json.dumps({
+                "type": "manager_unload_model",
+                "requester": "exo_manager",
+                "model_id": model_id,
+                "unload_all_instances": unload_all_instances,
+                "timestamp": time.time()
+            })
+            
+            request = SendOpaqueStatusRequest(
+                request_id=f"unload_{model_id}_{int(time.time())}",
+                status=unload_command
+            )
+            
+            response = await asyncio.wait_for(
+                self.stub.SendOpaqueStatus(request),
+                timeout=15.0
+            )
+            
+            logger.info(f"🗑️ 已向节点 {self.node_info.node_id} 发送卸载命令: {model_id}")
+            
+            return f"卸载命令已发送给节点 {self.node_info.node_id}"
+            
+        except Exception as e:
+            logger.error(f"❌ 发送卸载命令失败: {e}")
+            raise
+
+    async def send_inference_prompt(
+        self,
+        prompt: str = None,
+        model_id: str = None,
+        request_id: str = None,
+        max_tokens: int = 512,
+        temperature: float = 0.7,
+        top_k: int = 50,
+        top_p: float = 0.9,
+        stream: bool = True,
+        image: Dict[str, str] = None,
+        messages: List[Dict] = None,
+    ) -> Dict:
+        """
+        通过节点的 /v1/chat/completions API 发送推理请求（OpenAI 兼容格式）
+        
+        优先使用 WebSocket 推送（内网穿透场景），回退到 HTTP POST（公网场景）。
+        
+        Args:
+            prompt: 用户输入的文本 (旧版兼容，优先级低于 messages)
+            model_id: 模型ID
+            request_id: 请求唯一标识
+            max_tokens: 最大生成 token 数
+            temperature: 采样温度
+            top_k: Top-K 采样
+            top_p: Top-P 采样
+            stream: 是否流式输出
+            image: 图片数据 (旧版兼容)
+            messages: OpenAI 格式的多轮消息列表 (新版推荐)
+            
+        Returns:
+            推理结果或流式生成器
+        """
+        target_url = self.node_info.chat_completions_url
+        node_id = self.node_info.node_id
+        
+        if messages:
+            payload_messages = messages
+            logger.info(f"   使用 messages 数组 ({len(messages)} 条消息)")
+        elif prompt is not None:
+            if image and image.get("base64"):
+                payload_messages = [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt or "请描述这张图片"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{image.get('mime_type', 'image/png')};base64,{image['base64']}"
+                            }
+                        }
+                    ]
+                }]
+                logger.info(f"   [Image] 包含图片 ({image.get('mime_type', 'unknown')})")
+            else:
+                payload_messages = [{"role": "user", "content": prompt}]
+        else:
+            payload_messages = [{"role": "user", "content": ""}]
+        
+        logger.info(f"🚀 [Inference] 推理请求:")
+        logger.info(f"   节点: {node_id}")
+        logger.info(f"   model: {model_id}")
+        if len(payload_messages) > 0:
+            last_content = str(payload_messages[-1].get("content", ""))
+            logger.info(f"   last_msg: {last_content[:80]}{'...' if len(last_content) > 80 else ''}")
+        logger.info(f"   stream={stream}, max_tokens={max_tokens}, temp={temperature}")
+        
+        # 构建请求 payload
+        request_data = {
+            "model_id": model_id,
+            "model": model_id,
+            "messages": payload_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_k": top_k,
+            "top_p": top_p,
+            "stream": stream,
+        }
+        
+        # ✨ 策略优先级：WebSocket Push > HTTP POST
+        # 1️⃣ 优先：WebSocket 实时推送（内网穿透场景 - 最快）
+        try:
+            # 🔍 详细诊断日志
+            _ws_mgr = _get_node_ws_manager()
+            logger.info(f"🔍 [Inference] WebSocket 连接诊断:")
+            logger.info(f"   _is_ws_available() = {_is_ws_available()}")
+            logger.info(f"   node_ws_manager exists = {_ws_mgr is not None}")
+            if _ws_mgr:
+                logger.info(f"   node_ws_manager.node_connections = {list(_ws_mgr.node_connections.keys())}")
+                logger.info(f"   is_node_connected({node_id}) = {_ws_mgr.is_node_connected(node_id)}")
+            
+            if _is_ws_available() and _ws_mgr and _ws_mgr.is_node_connected(node_id):
+                logger.info(f"📡 [Inference] 使用 WebSocket 推送到节点 {node_id}")
+                
+                result_data = {
+                    "success": True,
+                    "node_id": node_id,
+                    "request_id": request_id,
+                    "model_id": model_id,
+                    "stream": stream,
+                    "message": "WebSocket 推理已开始",
+                }
+                
+                full_text = ""
+                token_count = 0
+                
+                async for chunk_bytes in _ws_mgr.send_inference_request(
+                    node_id=node_id,
+                    request_data=request_data,
+                    timeout=600.0
+                ):
+                    chunk_str = chunk_bytes.decode('utf-8', errors='replace')
+                    
+                    if chunk_str.startswith('data: ') and chunk_str.strip() != 'data: [DONE]':
+                        data_str = chunk_str[6:].strip()
+                        if data_str == '[DONE]':
+                            logger.info(f"🏁 [Inference] WS 流结束")
+                            break
+                        
+                        try:
+                            event_data = json.loads(data_str)
+                            
+                            if 'error' in event_data:
+                                error_info = event_data['error']
+                                logger.error(f"[Inference] WS 推理错误: {error_info}")
+                                yield {
+                                    "success": False,
+                                    "error": error_info.get("message", str(error_info)),
+                                    "node_id": node_id,
+                                    "request_id": request_id,
+                                }
+                                return
+                            
+                            delta = None
+                            if 'choices' in event_data and len(event_data['choices']) > 0:
+                                choice = event_data['choices'][0]
+                                delta = choice.get('delta', {})
+                                finish_reason = choice.get('finish_reason')
+                                
+                                if finish_reason in ('stop', 'length'):
+                                    logger.info(f"🏁 [Inference] WS 流结束 (finish_reason={finish_reason})")
+                                    break
+                            
+                            if delta and 'content' in delta:
+                                content = delta['content']
+                                if content:
+                                    full_text += content
+                                    token_count += 1
+                                    
+                                    result_data["text"] = full_text
+                                    result_data["token_count"] = token_count
+                                    result_data["delta"] = content
+                                    
+                                    yield result_data
+                                    
+                        except json.JSONDecodeError:
+                            continue
+                    
+                result_data["text"] = full_text
+                result_data["token_count"] = token_count
+                result_data["finished"] = True
+                yield result_data
+                return
+                
+        except Exception as ws_e:
+            logger.warning(f"[Inference] WebSocket 推送失败 ({node_id}): {ws_e}, 回退到 HTTP")
+        
+        # 2️⃣ 回退：HTTP POST（公网直连场景）
+        logger.info(f"🌐 [Inference] 回退到 HTTP POST: {target_url}")
+        
+        try:
+            import aiohttp
+            
+            timeout = aiohttp.ClientTimeout(total=600)
+            
+            # 诊断：检查 payload 中图片数据
+            import json as _json
+            payload_str = _json.dumps(request_data, ensure_ascii=False)
+            has_image_in_payload = False
+            image_data_size = 0
+            if messages and len(messages) > 0:
+                for msg in messages:
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "image_url":
+                                has_image_in_payload = True
+                                img_url = item.get("image_url", {}).get("url", "")
+                                image_data_size = len(img_url)
+                                logger.info(f"   🖼️ 发现图片数据: URL前缀={img_url[:50]}..., 总长度={image_data_size}")
+                                # 有图片时自动增加超时时间到 600 秒
+                                timeout = aiohttp.ClientTimeout(total=600)
+                                logger.info(f"   ⏰ 检测到图片请求，超时已调整为 600 秒")
+            
+            logger.info(f"   📦 Payload 大小: {len(payload_str)} 字符, 包含图片: {has_image_in_payload}, 图片数据长度: {image_data_size}")
+            
+            # 诊断：打印 payload 中 messages 的详细结构（不含完整 base64 数据）
+            if messages:
+                logger.info(f"   📝 Messages 结构:")
+                for i, msg in enumerate(messages):
+                    content = msg.get("content", "N/A")
+                    if isinstance(content, list):
+                        content_summary = []
+                        for item in content:
+                            if isinstance(item, dict):
+                                if item.get("type") == "image_url":
+                                    url = item.get("image_url", {}).get("url", "")
+                                    content_summary.append(f"image_url(url长度={len(url)}, 前50字符={url[:50]}...)")
+                                else:
+                                    content_summary.append(f"{item.get('type', '?')}: {str(item.get('text', item.get('content', '')))[:50]}")
+                            else:
+                                content_summary.append(str(item)[:50])
+                        logger.info(f"      [{i}] role={msg.get('role')}, content={content_summary}")
+                    else:
+                        logger.info(f"      [{i}] role={msg.get('role')}, content={str(content)[:100]}")
+            
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    target_url,
+                    json=request_data,
+                    headers={"Content-Type": "application/json"}
+                ) as response:
+                    if response.status != 200:
+                        error_text = await response.text()
+                        logger.error(f"[Inference] HTTP {response.status}: {error_text[:200]}")
+                        yield {
+                            "success": False,
+                            "error": f"节点返回错误 HTTP {response.status}: {error_text[:100]}",
+                            "node_id": self.node_info.node_id,
+                            "request_id": request_id,
+                        }
+                        return
+                    
+                    if stream:
+                        logger.info(f"✅ [Inference] 流式响应已建立")
+                        
+                        result_data = {
+                            "success": True,
+                            "node_id": self.node_info.node_id,
+                            "request_id": request_id,
+                            "model_id": model_id,
+                            "stream": True,
+                            "message": "流式推理已开始",
+                        }
+                        
+                        full_text = ""
+                        token_count = 0
+                        
+                        buffer = ""
+                        async for chunk in response.content:
+                            if chunk:
+                                buffer += chunk.decode('utf-8', errors='replace')
+                                
+                                while '\n\n' in buffer:
+                                    event_str, buffer = buffer.split('\n\n', 1)
+                                    event_str = event_str.strip()
+                                    
+                                    if not event_str or not event_str.startswith('data: '):
+                                        continue
+                                    
+                                    data_str = event_str[6:]  # 去掉 "data: "
+                                    if data_str.strip() == '[DONE]':
+                                        logger.info(f"🏁 [Inference] 流结束 (SSE [DONE])")
+                                        break
+                                    
+                                    try:
+                                        event_data = json.loads(data_str)
+                                        
+                                        delta = None
+                                        if 'choices' in event_data and len(event_data['choices']) > 0:
+                                            choice = event_data['choices'][0]
+                                            delta = choice.get('delta', {})
+                                            finish_reason = choice.get('finish_reason')
+                                            
+                                            if finish_reason in ('stop', 'length'):
+                                                logger.info(f"🏁 [Inference] 流结束 (finish_reason={finish_reason})")
+                                                break
+                                        
+                                        if delta and 'content' in delta:
+                                            content = delta['content']
+                                            if content:
+                                                full_text += content
+                                                token_count += 1
+                                                
+                                                result_data["text"] = full_text
+                                                result_data["token_count"] = token_count
+                                                result_data["delta"] = content
+                                                
+                                                yield result_data
+                                                
+                                    except json.JSONDecodeError as je:
+                                        continue
+                                else:
+                                    continue
+                                break
+                        
+                        result_data["text"] = full_text
+                        result_data["token_count"] = token_count
+                        result_data["delta"] = None
+                        result_data["finished"] = True
+                        yield result_data
+                        return
+                    
+                    else:
+                        data = await response.json()
+                        logger.info(f"[Inference] 非流式响应已收到")
+                        
+                        text = ""
+                        if 'choices' in data and len(data['choices']) > 0:
+                            text = data['choices'][0].get('message', {}).get('content', '')
+                        
+                        yield {
+                            "success": True,
+                            "node_id": self.node_info.node_id,
+                            "request_id": request_id,
+                            "model_id": model_id,
+                            "stream": False,
+                            "text": text,
+                            "token_count": len(text) if text else 0,
+                            "message": f"推理完成 ({len(text)} 字符)",
+                            "raw_response": data,
+                        }
+                        return
+                        
+        except asyncio.TimeoutError:
+            logger.error(f"[Inference] 超时: {self.node_info.node_id}")
+            yield {"success": False, "error": "推理超时 (请检查节点是否正常响应，或增加超时时间)", "node_id": self.node_info.node_id, "request_id": request_id}
+            return
+        except Exception as e:
+            logger.error(f"[Inference] 发送失败 ({self.node_info.node_id}): {e}")
+            import traceback
+            traceback.print_exc()
+            yield {"success": False, "error": str(e), "node_id": self.node_info.node_id, "request_id": request_id}
+            return
+
+    async def _decode_tokens(self, tokens: list, model_id: str) -> Optional[str]:
+        """
+        将 token IDs 解码为文本
+        
+        尝试多种解码方式：
+        1. 直接 Unicode 解码（适用于简单的 token）
+        2. 如果有 tokenizer 可用，使用 tokenizer 解码
+        
+        Args:
+            tokens: token ID 列表
+            model_id: 模型ID（用于查找tokenizer）
+            
+        Returns:
+            解码后的文本，或 None（如果无法解码）
+        """
+        if not tokens:
+            return None
+        
+        try:
+            # 方法1: 尝试简单的字符解码
+            decoded_chars = []
+            for t in tokens:
+                if isinstance(t, (int, np.integer)):
+                    if 32 <= t <= 126:
+                        decoded_chars.append(chr(t))
+                    elif t > 127:
+                        try:
+                            decoded_chars.append(chr(t))
+                        except (ValueError, OverflowError):
+                            decoded_chars.append(f"[{t}]")
+                    elif t == 10:
+                        decoded_chars.append('\n')
+                    else:
+                        decoded_chars.append(f"[{t}]")
+            
+            text = ''.join(decoded_chars)
+            
+            if text and len([c for c in text if c not in '[]\n']) > len(tokens) * 0.3:
+                logger.info(f"   Token 解码成功 (Unicode): {text[:100]}...")
+                return text
+                
+        except Exception as e:
+            logger.debug(f"   Unicode 解码失败: {e}")
+        
+        try:
+            # 方法2: 尝试加载 tokenizer 解码
+            import sys
+            import os
+            
+            exo_path = os.path.join(os.path.dirname(__file__), '..', 'exo', 'inference')
+            if exo_path not in sys.path:
+                sys.path.insert(0, exo_path)
+            
+            try:
+                from model_tokenizers import ModelTokenizers
+                tokenizers = ModelTokenizers()
+                
+                import numpy as np
+                tokens_array = np.array(tokens, dtype=np.int32)
+                text = tokenizers.decode(tokens_array, model_id)
+                
+                if text and len(text.strip()) > 0:
+                    logger.info(f"   Token 解码成功 (Tokenizer): {text[:100]}...")
+                    return text
+                    
+            except ImportError:
+                logger.debug("   ModelTokenizers 不可用")
+            except Exception as te:
+                logger.debug(f"   Tokenizer 解码失败: {te}")
+                
+        except Exception as e:
+            logger.debug(f"   Tokenizer 加载失败: {e}")
+        
+        return None
+
+
+class EXOClusterManager:
+    """
+    EXO集群管理器 - 核心管理逻辑
+    
+    管理：
+    - 所有节点的连接
+    - 节点信息的收集与缓存
+    - GPU池的统一调配
+    - 提供给API层的数据
+    """
+    
+    def __init__(self, config_path: Optional[str] = None):
+        self.nodes: Dict[str, EXONodeInfo] = {}
+        self.connectors: Dict[str, NodeConnector] = {}
+        self.config_path = config_path
+        self._monitor_task: Optional[asyncio.Task] = None
+        self._running = False
+        self._broadcast_callback = None
+        self._instance_counter: Dict[str, int] = {}
+        self.pending_tasks: Dict[str, List[Dict]] = {}
+        
+        from load_balancer import LoadBalancer
+        self.load_balancer = LoadBalancer(self)
+        
+        # 统计数据
+        self.stats = {
+            "total_nodes": 0,
+            "online_nodes": 0,
+            "total_models": 0,
+            "total_memory_gb": 0,
+            "last_update": 0
+        }
+        
+    def set_broadcast_callback(self, callback):
+        """设置状态更新广播回调（用于WebSocket推送）"""
+        self._broadcast_callback = callback
+    
+    def _generate_instance_id(self, model_id: str) -> str:
+        """
+        为模型自动生成唯一的实例ID
+        
+        规则：worker-1, worker-2, ...
+        
+        ✨ 增强版：包含重复检测机制，确保生成的ID不会与现有实例冲突
+        """
+        if model_id not in self._instance_counter:
+            self._instance_counter[model_id] = 0
+        
+        # 先尝试基于计数器生成
+        self._instance_counter[model_id] += 1
+        count = self._instance_counter[model_id]
+        candidate_id = f"worker-{count}"
+        
+        # ✅ 重复检测：检查该ID是否已被使用
+        existing_instances = self.get_model_instances(model_id)
+        used_instance_ids = {inst["instance_id"] for inst in existing_instances}
+        
+        max_retries = 100  # 防止无限循环
+        retry_count = 0
+        
+        while candidate_id in used_instance_ids and retry_count < max_retries:
+            logger.warning(f"⚠️ [ClusterCore] 检测到实例ID冲突: {candidate_id} 已存在，尝试下一个...")
+            self._instance_counter[model_id] += 1
+            count = self._instance_counter[model_id]
+            candidate_id = f"worker-{count}"
+            retry_count += 1
+        
+        if retry_count > 0:
+            logger.info(f"✅ [ClusterCore] 经过 {retry_count} 次重试，生成唯一实例ID: {candidate_id}")
+        
+        return candidate_id
+    
+    def get_model_instances(self, model_id: str) -> List[Dict[str, Any]]:
+        """
+        获取模型的所有实例信息
+        
+        Args:
+            model_id: 模型ID
+            
+        Returns:
+            实例信息列表
+        """
+        instances = []
+        
+        for node_id, node_info in self.nodes.items():
+            for model in node_info.loaded_models:
+                mid = model.get("model_id", "")
+                if mid == model_id or mid.startswith(f"{model_id}::"):
+                    instance_id = "default"
+                    if "::" in mid:
+                        instance_id = mid.split("::", 1)[1]
+                    
+                    instances.append({
+                        "node_id": node_id,
+                        "full_model_id": mid,
+                        "instance_id": instance_id,
+                        "shard": model.get("shard", {})
+                    })
+        
+        return instances
+    
+    def get_all_instances_summary(self) -> Dict[str, int]:
+        """
+        获取所有模型的实例数量摘要
+        
+        Returns:
+            {model_id: instance_count}
+        """
+        summary = {}
+        
+        for node_info in self.nodes.values():
+            for model in node_info.loaded_models:
+                mid = model.get("model_id", "")
+                base_model_id = mid.split("::")[0] if "::" in mid else mid
+                
+                if base_model_id not in summary:
+                    summary[base_model_id] = 0
+                summary[base_model_id] += 1
+        
+        return summary
+    
+    async def initialize(self):
+        """初始化管理器：加载配置、连接节点"""
+        logger.info("🚀 初始化EXO集群管理器...")
+        
+        # 从配置文件加载节点
+        if self.config_path and os.path.exists(self.config_path):
+            await self._load_from_config(self.config_path)
+        
+        # ✅ 同步实例计数器（从现有节点信息中提取，避免ID冲突）
+        self._sync_instance_counters_from_nodes()
+        
+        # 启动后台监控任务
+        self._running = True
+        self._monitor_task = asyncio.create_task(self._monitor_loop())
+        
+        logger.info(f"✅ 初始化完成，已加载 {len(self.nodes)} 个节点")
+    
+    def _sync_instance_counters_from_nodes(self):
+        """
+        从已连接节点的模型信息中同步实例计数器
+        
+        确保重启后生成的新实例ID不会与已有实例冲突
+        """
+        try:
+            for node_id, node_info in self.nodes.items():
+                for model in node_info.loaded_models:
+                    mid = model.get("model_id", "")
+                    if "::" not in mid:
+                        continue
+                    
+                    base_model_id, instance_id = mid.split("::", 1)
+                    
+                    # 只统计 worker-X 格式的实例
+                    if instance_id and instance_id != "default" and instance_id.startswith("worker-"):
+                        try:
+                            worker_num = int(instance_id.split("-")[1])
+                            
+                            if base_model_id not in self._instance_counter:
+                                self._instance_counter[base_model_id] = 0
+                            
+                            if worker_num > self._instance_counter[base_model_id]:
+                                self._instance_counter[base_model_id] = worker_num
+                                
+                            logger.debug(f"[ClusterCore] 同步实例计数器: {base_model_id} -> {self._instance_counter[base_model_id]} (来自 {mid})")
+                        except (ValueError, IndexError):
+                            logger.warning(f"[ClusterCore] 无法解析实例ID: {instance_id}")
+            
+            logger.info(f"✅ [ClusterCore] 实例计数器同步完成: {dict(self._instance_counter)}")
+        except Exception as e:
+            logger.warning(f"[ClusterCore] 同步实例计数器失败: {e}")
+    
+    async def _load_from_config(self, config_path: str):
+        """从network_config.json加载节点配置"""
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            
+            peers = config.get('peers', {})
+            
+            for node_id, peer_config in peers.items():
+                address = peer_config.get('address', '127.0.0.1')
+                port = peer_config.get('port', 50051)
+                device_caps = peer_config.get('device_capabilities', {})
+                
+                node_info = EXONodeInfo(
+                    node_id=node_id,
+                    address=address,
+                    port=port,
+                    device_info=device_caps
+                )
+                
+                self.nodes[node_id] = node_info
+                
+                # 创建连接器并尝试连接
+                connector = NodeConnector(node_info, manager=self)
+                self.connectors[node_id] = connector
+                
+                success = await connector.connect()
+                if success:
+                    logger.info(f"  ✓ 节点 {node_id} 已连接 ({address}:{port})")
+                else:
+                    logger.warning(f"  ✗ 节点 {node_id} 连接失败")
+            
+            logger.info(f"从配置文件加载了 {len(peers)} 个节点")
+            
+        except Exception as e:
+            logger.error(f"加载配置文件失败: {e}")
+    
+    async def add_node(self, node_id: str, address: str, port: int = 50051, chatgpt_api_port: int = 52415, device_info: Dict[str, Any] = None) -> bool:
+        """
+        手动添加节点
+        
+        Args:
+            node_id: 节点唯一标识
+            address: IP地址或主机名
+            port: gRPC端口号
+            chatgpt_api_port: ChatGPT API HTTP端口号
+            device_info: 节点主动注册时提供的设备信息（可选）
+            
+        Returns:
+            是否添加成功
+        """
+        if node_id in self.nodes:
+            logger.warning(f"节点 {node_id} 已存在，尝试重新连接")
+            connector = self.connectors.get(node_id)
+            if connector:
+                await connector.disconnect()
+            del self.nodes[node_id]
+            if node_id in self.connectors:
+                del self.connectors[node_id]
+        
+        node_info = EXONodeInfo(
+            node_id=node_id,
+            address=address,
+            port=port,
+            chatgpt_api_port=chatgpt_api_port,
+            device_info=device_info if device_info else {}
+        )
+        
+        self.nodes[node_id] = node_info
+        
+        connector = NodeConnector(node_info, manager=self)
+        self.connectors[node_id] = connector
+        
+        success = await connector.connect()
+        
+        if success:
+            logger.info(f"➕ 节点注册成功: {node_id}@{address}:{port} (HTTP:{chatgpt_api_port})")
+        else:
+            error_msg = connector.node_info.error_message or "未知错误"
+            logger.warning(f"⚠️ 节点 {node_id} 已记录但连接失败: {error_msg}")
+            logger.info(f"   将在后台重试连接...")
+            asyncio.create_task(self._retry_connect(node_id, max_retries=5, interval=3.0))
+        
+        return True
+    
+    async def remove_node(self, node_id: str) -> bool:
+        """移除节点"""
+        if node_id not in self.nodes:
+            return False
+        
+        connector = self.connectors.get(node_id)
+        if connector:
+            await connector.disconnect()
+            del self.connectors[node_id]
+        
+        del self.nodes[node_id]
+        logger.info(f"➖ 已移除节点: {node_id}")
+        
+        return True
+    
+    async def _retry_connect(self, node_id: str, max_retries: int = 5, interval: float = 3.0):
+        """后台重试连接节点"""
+        connector = self.connectors.get(node_id)
+        if not connector:
+            return
+        
+        for attempt in range(1, max_retries + 1):
+            await asyncio.sleep(interval)
+            
+            if node_id not in self.nodes:
+                logger.info(f"[RetryConnect] 节点 {node_id} 已被移除，停止重试")
+                return
+            
+            try:
+                logger.info(f"[RetryConnect] 重试连接 {node_id} ({attempt}/{max_retries})...")
+                
+                if connector.channel:
+                    try:
+                        connector.channel.close()
+                    except Exception:
+                        pass
+                
+                success = await connector.connect()
+                
+                if success:
+                    logger.info(f"✅ [RetryConnect] 节点 {node_id} 连接成功!")
+                    return
+                else:
+                    logger.warning(f"[RetryConnect] 节点 {node_id} 第{attempt}次重试失败")
+                    
+            except Exception as e:
+                logger.error(f"[RetryConnect] 节点 {node_id} 重试异常: {e}")
+        
+        logger.error(f"[RetryConnect] 节点 {node_id} 重试{max_retries}次后仍失败")
+    
+    async def _monitor_loop(self):
+        """后台监控循环 - 定期检查所有节点状态"""
+        logger.info("🔄 监控循环已启动")
+        while self._running:
+            try:
+                online_count = 0
+                total_memory = 0
+                
+                for node_id, connector in list(self.connectors.items()):
+                    is_healthy = await connector.health_check()
+                    
+                    if is_healthy:
+                        online_count += 1
+                        node_info = self.nodes[node_id]
+                        total_memory += node_info.device_info.get('memory', 0)
+                        
+                        # 定期从节点获取最新状态（已加载模型、显存使用等）
+                        logger.debug(f"📊 正在获取节点 {node_id} 的实时状态...")
+                        await connector._fetch_loaded_models()
+                
+                # 更新统计数据
+                self.stats.update({
+                    "total_nodes": len(self.nodes),
+                    "online_nodes": online_count,
+                    "total_models": sum(len(n.loaded_models) for n in self.nodes.values()),
+                    "total_memory_gb": total_memory / 1024,
+                    "last_update": time.time()
+                })
+                
+                # 通知 WebSocket 客户端更新
+                await self._broadcast_status_update()
+                
+            except Exception as e:
+                logger.error(f"监控循环出错: {e}")
+            
+            # 每10秒检查一次
+            await asyncio.sleep(10)
+    
+    async def _broadcast_status_update(self):
+        """广播状态更新给所有 WebSocket 客户端"""
+        if self._broadcast_callback:
+            try:
+                status = self.get_cluster_status()
+                await self._broadcast_callback({
+                    "type": "status_update",
+                    "data": status
+                })
+            except Exception as e:
+                logger.debug(f"广播状态更新失败: {e}")
+
+    async def _on_model_load_completed(
+        self,
+        node_id: str,
+        task_id: str,
+        success: bool,
+        loaded_models: List[Dict],
+        error: str = ""
+    ):
+        """
+        WebSocket 回调：Node 完成模型加载
+        
+        由 NodeWSManager 在收到 model_load_complete 消息时调用
+        """
+        if success:
+            # 更新节点信息
+            if node_id in self.nodes:
+                node = self.nodes[node_id]
+                node.loaded_models = loaded_models
+                node.last_heartbeat = time.time()
+                node.status = NodeStatus.ONLINE
+                
+                logger.info(f"📦 [WS-Callback] 节点 {node_id} 模型加载成功 (任务ID: {task_id})")
+                
+                # 广播状态更新（WebSocket 推送给前端）
+                if self._broadcast_callback:
+                    try:
+                        await self._broadcast_callback({
+                            "type": "model_loaded",
+                            "node_id": node_id,
+                            "task_id": task_id,
+                            "loaded_models": loaded_models,
+                            "success": True
+                        })
+                    except Exception as e:
+                        logger.debug(f"广播模型加载事件失败: {e}")
+        else:
+            logger.error(f"❌ [WS-Callback] 节点 {node_id} 模型加载失败 (任务ID: {task_id}): {error}")
+            
+            # 可以在这里触发重试或其他错误处理逻辑
+
+    async def _on_model_unload_completed(
+        self,
+        node_id: str,
+        model_id: str,
+        success: bool
+    ):
+        """
+        WebSocket 回调：Node 完成模型卸载
+        
+        由 NodeWSManager 在收到 model_unload_complete 消息时调用
+        """
+        if success and node_id in self.nodes:
+            node = self.nodes[node_id]
+            
+            # 更新节点的已加载模型列表
+            node.loaded_models = [
+                m for m in node.loaded_models 
+                if m.get("model_id") != model_id
+            ]
+            node.last_heartbeat = time.time()
+            
+            logger.info(f"🗑️ [WS-Callback] 节点 {node_id} 模型卸载成功: {model_id}")
+            
+            # 广播状态更新
+            if self._broadcast_callback:
+                try:
+                    await self._broadcast_callback({
+                        "type": "model_unloaded",
+                        "node_id": node_id,
+                        "model_id": model_id,
+                        "success": True
+                    })
+                except Exception as e:
+                    logger.debug(f"广播模型卸载事件失败: {e}")
+        else:
+            logger.error(f"❌ [WS-Callback] 节点 {node_id} 模型卸载失败: {model_id}")
+
+    def get_cluster_status(self) -> Dict:
+        """获取整个集群的状态摘要"""
+        nodes_list = [node.to_dict() for node in self.nodes.values()]
+        
+        return {
+            **self.stats,
+            "nodes": nodes_list,
+            "manager_uptime": time.time() - self.stats.get("start_time", time.time())
+        }
+    
+    def get_node_detail(self, node_id: str) -> Optional[Dict]:
+        """获取单个节点的详细信息"""
+        node = self.nodes.get(node_id)
+        if not node:
+            return None
+        
+        return node.to_dict()
+    
+    async def load_model_to_cluster(
+        self,
+        model_id: str,
+        model_path: str,
+        n_layers: int = 32,
+        strategy: str = "memory_weighted",
+        target_nodes: Optional[List[str]] = None,
+        instance_id: Optional[str] = None,
+        auto_instance: bool = False
+    ) -> Dict:
+        """
+        将模型加载到集群（核心方法）- 支持多实例
+        
+        工作流程：
+        1. 计算分片分配方案
+        2. 向各节点发送分片配置
+        3. 等待节点确认加载完成
+        
+        Args:
+            model_id: 模型标识符 (如 "Qwen/Qwen3-4B")
+            model_path: 模型文件路径 (如 "./models/qwen3-4b")
+            n_layers: 模型总层数
+            strategy: 分配策略 ('memory_weighted', 'uniform', 'performance_weighted')
+            target_nodes: 指定目标节点列表（可选，默认使用所有在线节点）
+            instance_id: 实例ID（支持多实例，None表示默认）
+            auto_instance: 是否自动生成实例ID
+            
+        Returns:
+            加载结果详情
+            
+        示例:
+            # 加载默认实例
+            await manager.load_model_to_cluster("qwen3-0.6b", "./models")
+            
+            # 加载多个实例
+            await manager.load_model_to_cluster("qwen3-0.6b", "./models", instance_id="worker-1")
+            await manager.load_model_to_cluster("qwen3-0.6b", "./models", instance_id="worker-2")
+            
+            # 自动生成实例ID
+            await manager.load_model_to_cluster("qwen3-0.6b", "./models", auto_instance=True)
+        """
+        from gpu_pool_integration import GPUPoolIntegration
+        
+        # 处理 instance_id
+        if auto_instance and instance_id is None:
+            instance_id = self._generate_instance_id(model_id)
+        
+        if instance_id is None:
+            instance_id = "default"
+        
+        logger.info(f"🔍 [ModelLoad] instance_id 最终值: {instance_id}, auto_instance={auto_instance}")
+        
+        # 构建完整模型ID用于内部管理
+        full_model_id = f"{model_id}" if instance_id == "default" else f"{model_id}::{instance_id}"
+        
+        logger.info(f"🚀 开始加载模型到集群: {model_id} (实例: {instance_id})")
+        
+        pool = GPUPoolIntegration(self)
+        
+        try:
+            # Step 1: 预览/计算分配方案
+            allocation = await pool.preview_allocation(
+                model_id=model_id,
+                total_layers=n_layers,
+                strategy=strategy
+            )
+            
+            logger.info(f"📦 模型 {full_model_id} 分配方案:")
+            for alloc in allocation.allocations:
+                logger.info(f"   节点 {alloc['node_id']}: 层 {alloc['start_layer']}-{alloc['end_layer']} ({alloc['layers_count']}层)")
+            
+            # Step 2: 过滤目标节点（如果指定）
+            if target_nodes:
+                allocation.allocations = [
+                    a for a in allocation.allocations 
+                    if a["node_id"] in target_nodes
+                ]
+            
+            if not allocation.allocations:
+                return {
+                    "success": False,
+                    "error": "没有可用的目标节点"
+                }
+            
+            results = []
+            for alloc in allocation.allocations:
+                node_id = alloc["node_id"]
+                connector = self.connectors.get(node_id)
+                
+                if not connector:
+                    results.append({
+                        "node_id": node_id,
+                        "success": False,
+                        "error": "节点连接器不存在"
+                    })
+                    continue
+                
+                # 构建分片配置数据
+                peer_list = []
+                for node in self.nodes.values():
+                    if node.node_id != node_id and node.status == NodeStatus.ONLINE:
+                        peer_list.append({
+                            "node_id": node.node_id,
+                            "address": node.address,
+                            "port": node.port,
+                            "device_capabilities": node.device_info
+                        })
+                
+                shard_task = {
+                    "task_id": f"{full_model_id}_{alloc['start_layer']}_{alloc['end_layer']}_{int(time.time())}",
+                    "model_id": full_model_id,
+                    "base_model_id": model_id,
+                    "instance_id": instance_id,
+                    "model_path": model_path,
+                    "shard": {
+                        "start_layer": alloc["start_layer"],
+                        "end_layer": alloc["end_layer"],
+                        "n_layers": n_layers
+                    },
+                    "peer_list": peer_list,
+                    "created_at": time.time(),
+                    "status": "pending"
+                }
+                
+                # ✨ 策略优先级：WebSocket Push > gRPC Direct > HTTP Pull
+                ws_result = None
+                
+                # 1️⃣ 优先：WebSocket 实时推送（内网穿透场景 - 最快）
+                try:
+                    # 🔍 诊断日志：WS 连接状态
+                    _ws_mgr_load = _get_node_ws_manager()
+                    logger.info(f"🔍 [ModelLoad] WS 推送诊断 (节点 {node_id}):")
+                    logger.info(f"   _is_ws_available() = {_is_ws_available()}")
+                    logger.info(f"   node_ws_manager exists = {_ws_mgr_load is not None}")
+                    if _ws_mgr_load:
+                        logger.info(f"   connected nodes = {list(_ws_mgr_load.node_connections.keys())}")
+                        logger.info(f"   is_node_connected({node_id}) = {_ws_mgr_load.is_node_connected(node_id)}")
+                    
+                    if _is_ws_available() and _ws_mgr_load and _ws_mgr_load.is_node_connected(node_id):
+                        logger.info(f"📡 [ModelLoad] 尝试通过 WebSocket 推送到节点 {node_id}...")
+                        ws_success = await _ws_mgr_load.send_model_load_request(
+                            node_id=node_id,
+                            task_id=shard_task["task_id"],
+                            model_id=full_model_id,
+                            model_path=model_path,
+                            shard=shard_task["shard"],
+                            peer_list=peer_list,
+                            instance_id=instance_id  # ✅ 传递实例ID
+                        )
+                        
+                        if ws_success:
+                            # ✅ 更新 Manager 端的 loaded_models 列表（与 gRPC/HTTP 路径保持一致）
+                            ws_shard_payload = {
+                                "model_id": full_model_id,
+                                "base_model_id": model_id,
+                                "instance_id": instance_id,
+                                "shard": shard_task["shard"]
+                            }
+                            connector._update_loaded_models(ws_shard_payload)
+                            
+                            results.append({
+                                "node_id": node_id,
+                                "success": True,
+                                "method": "websocket_push",  # 标记为 WS 推送
+                                "task_id": shard_task["task_id"],
+                                "message": f"任务已通过 WebSocket 实时推送到节点 {node_id}",
+                                "shard": shard_task["shard"]
+                            })
+                            logger.info(f"🚀 [WS-Push] 节点 {node_id} 分片配置已实时推送 (任务ID: {shard_task['task_id']})")
+                            continue
+                except Exception as e:
+                    logger.warning(f"⚠️ [WS-Push] WebSocket 推送失败 ({node_id}): {e}, 尝试其他方式")
+                
+                # 2️⃣ 次优：gRPC 直接发送（公网场景）
+                direct_result = None
+                if connector.stub:
+                    try:
+                        direct_result = await connector.send_shard_config(
+                            model_id=full_model_id,
+                            model_path=model_path,
+                            start_layer=alloc["start_layer"],
+                            end_layer=alloc["end_layer"],
+                            n_layers=n_layers,
+                            peer_list=peer_list
+                        )
+                        if direct_result.get("success"):
+                            results.append(direct_result)
+                            logger.info(f"✅ [Direct] 节点 {node_id} 分片配置已发送")
+                            continue
+                    except Exception as e:
+                        logger.warning(f"[Direct] 发送失败 ({node_id}): {e}, 切换到 Pull 模式")
+                
+                # ✨ Pull 模式：存入待处理队列，等待 Node 心跳拉取
+                if node_id not in self.pending_tasks:
+                    self.pending_tasks[node_id] = []
+                
+                self.pending_tasks[node_id].append(shard_task)
+                
+                results.append({
+                    "node_id": node_id,
+                    "success": True,  # ✅ 任务已入队，视为成功
+                    "method": "pull",  # 标记为 Pull 模式
+                    "task_id": shard_task["task_id"],
+                    "message": f"任务已入队，等待节点 {node_id} 通过心跳拉取",
+                    "shard": shard_task["shard"]
+                })
+                
+                logger.info(f"📥 [Pull] 节点 {node_id} 分片配置已入队 (任务ID: {shard_task['task_id']})")
+            
+            # Step 4: 汇总结果
+            success_count = sum(1 for r in results if r.get("success"))
+            total = len(results)
+            
+            return {
+                "success": success_count > 0,
+                "model_id": model_id,
+                "instance_id": instance_id,
+                "full_model_id": full_model_id,
+                "allocation": {
+                    "strategy": strategy,
+                    "total_layers": n_layers,
+                    "nodes_count": total,
+                    "allocations": allocation.allocations
+                },
+                "load_results": results,
+                "summary": {
+                    "success_nodes": success_count,
+                    "failed_nodes": total - success_count,
+                    "total_nodes": total
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 加载模型失败: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "model_id": model_id
+            }
+    
+    async def load_multiple_instances(
+        self,
+        model_id: str,
+        model_path: str,
+        n_layers: int = 32,
+        strategy: str = "memory_weighted",
+        target_nodes: Optional[List[str]] = None,
+        count: int = 1
+    ) -> Dict:
+        """
+        批量加载多个模型实例（后端全权管理instance_id）
+        
+        ✨ 核心方法：前端只需传入数量，后端自动分配唯一ID并避免冲突
+        
+        Args:
+            model_id: 模型标识符
+            model_path: 模型文件路径
+            n_layers: 模型总层数
+            strategy: 分配策略
+            target_nodes: 目标节点列表（可选）
+            count: 要创建的实例数量
+            
+        Returns:
+            {
+                "success": true,
+                "model_id": "...",
+                "instances": [
+                    {"instance_id": "worker-3", "full_model_id": "...::worker-3", "success": true, ...},
+                    {"instance_id": "worker-4", "full_model_id": "...::worker-4", "success": true, ...}
+                ],
+                "summary": {"total": 2, "success": 2, "failed": 0}
+            }
+        """
+        logger.info(f"🚀 [BatchLoad] 开始批量加载 {count} 个实例: {model_id}")
+        
+        instances_results = []
+        success_count = 0
+        failed_count = 0
+        
+        for i in range(1, count + 1):
+            try:
+                logger.info(f"  📦 [{i}/{count}] 正在创建第 {i} 个实例...")
+                
+                # ✅ 每次调用都使用 auto_instance=True，让系统自动生成唯一ID
+                result = await self.load_model_to_cluster(
+                    model_id=model_id,
+                    model_path=model_path,
+                    n_layers=n_layers,
+                    strategy=strategy,
+                    target_nodes=target_nodes,
+                    instance_id=None,       # 不指定，让系统自动分配
+                    auto_instance=True      # ✅ 启用自动生成（带冲突检测）
+                )
+                
+                instance_info = {
+                    "instance_id": result.get("instance_id", f"unknown-{i}"),
+                    "full_model_id": result.get("full_model_id", f"{model_id}::unknown-{i}"),
+                    "success": result.get("success", False),
+                    "allocation": result.get("allocation"),
+                    "error": result.get("error")
+                }
+                
+                instances_results.append(instance_info)
+                
+                if result.get("success"):
+                    success_count += 1
+                    logger.info(f"  ✓ [{i}/{count}] 实例 {instance_info['instance_id']} 创建成功")
+                else:
+                    failed_count += 1
+                    logger.warning(f"  ✗ [{i}/{count}] 实例 #{i} 失败: {result.get('error')}")
+                
+            except Exception as e:
+                failed_count += 1
+                error_msg = str(e)
+                instances_results.append({
+                    "instance_id": f"error-{i}",
+                    "full_model_id": f"{model_id}::error-{i}",
+                    "success": False,
+                    "error": error_msg
+                })
+                logger.error(f"  ✗ [{i}/{count}] 实例 #{i} 异常: {error_msg}")
+            
+            # 实例间添加小延迟，避免并发冲突
+            if i < count:
+                await asyncio.sleep(0.2)
+        
+        summary = {
+            "total": count,
+            "success": success_count,
+            "failed": failed_count
+        }
+        
+        logger.info(f"✅ [BatchLoad] 批量加载完成: {model_id} -> 成功 {success_count}/{count}")
+        
+        return {
+            "success": success_count > 0,
+            "model_id": model_id,
+            "instances": instances_results,
+            "summary": summary
+        }
+    
+    async def unload_model_from_cluster(
+        self, 
+        model_id: str, 
+        instance_id: Optional[str] = None,
+        unload_all_instances: bool = False
+    ) -> Dict:
+        """
+        从集群卸载模型（支持多实例）
+        
+        Args:
+            model_id: 要卸载的模型ID
+            instance_id: 实例ID（None表示默认实例或所有实例）
+            unload_all_instances: 是否卸载该模型的所有实例
+            
+        Returns:
+            卸载结果
+        """
+        # 构建完整模型ID
+        if instance_id is None:
+            instance_id = "default"
+        
+        full_model_id = f"{model_id}" if instance_id == "default" else f"{model_id}::{instance_id}"
+        
+        logger.info(f"🗑️ 开始卸载模型: {full_model_id} (卸载所有实例={unload_all_instances})")
+        
+        results = []
+        
+        for node_id, connector in self.connectors.items():
+            if not connector.stub:
+                continue
+            
+            try:
+                # 传入完整模型ID用于精确匹配，并传递 unload_all_instances 标志
+                result = await connector.send_unload_command(full_model_id, unload_all_instances=unload_all_instances)
+                results.append({
+                    "node_id": node_id,
+                    "success": True,
+                    "message": result
+                })
+                
+                # 更新本地缓存（匹配完整ID或基础ID）
+                node_info = self.nodes.get(node_id)
+                if node_info:
+                    node_info.loaded_models = [
+                        m for m in node_info.loaded_models 
+                        if m.get("model_id") != full_model_id and 
+                           (not unload_all_instances or m.get("model_id", "").split("::")[0] != model_id)
+                    ]
+                    
+            except Exception as e:
+                results.append({
+                    "node_id": node_id,
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        return {
+            "success": any(r["success"] for r in results),
+            "model_id": model_id,
+            "instance_id": instance_id,
+            "full_model_id": full_model_id,
+            "unload_all_instances": unload_all_instances,
+            "results": results
+        }
+    
+    async def rebalance_model(self, model_id: str) -> Dict:
+        """
+        重新平衡模型分布
+        
+        当有新节点加入或节点资源变化时调用，
+        会重新计算最优分配方案并迁移分片。
+        """
+        # 先获取当前模型的分配信息
+        current_allocations = []
+        for node_id, node_info in self.nodes.items():
+            for model in node_info.loaded_models:
+                if model.get("model_id") == model_id:
+                    current_allocations.append({
+                        "node_id": node_id,
+                        **model
+                    })
+        
+        if not current_allocations:
+            return {"success": False, "error": f"模型 {model_id} 未找到"}
+        
+        # 卸载旧分配，重新加载
+        unload_result = await self.unload_model_from_cluster(model_id)
+        
+        if not unload_result["success"]:
+            return {"success": False, "error": "卸载旧分配失败", "detail": unload_result}
+        
+        # TODO: 根据当前状态重新计算最优分配
+        # 这里可以复用 load_model_to_cluster 的逻辑
+        
+        return {
+            "success": True,
+            "message": f"模型 {model_id} 已准备重新平衡",
+            "unload_result": unload_result
+        }
+    
+    async def shutdown(self):
+        """关闭管理器，清理资源"""
+        logger.info("正在关闭EXO集群管理器...")
+        
+        self._running = False
+        
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            try:
+                await self._monitor_task
+            except asyncio.CancelledError:
+                pass
+        
+        # 断开所有连接
+        for connector in self.connectors.values():
+            await connector.disconnect()
+        
+        self.connectors.clear()
+        self.nodes.clear()
+        
+        logger.info("✅ EXO集群管理器已关闭")
+
+
+# 全局实例（单例）
+cluster_manager: Optional[EXOClusterManager] = None
+
+
+async def get_cluster_manager() -> EXOClusterManager:
+    """获取全局集群管理器实例"""
+    global cluster_manager
+    
+    if cluster_manager is None:
+        cluster_manager = EXOClusterManager()
+        await cluster_manager.initialize()
+    
+    return cluster_manager
+
+
+__all__ = ['EXOClusterManager', 'NodeConnector', 'EXONodeInfo', 'get_cluster_manager']

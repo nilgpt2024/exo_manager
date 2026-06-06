@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>确认登录 - EXO AI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px 30px;
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .logo-section {
+            margin-bottom: 30px;
+        }
+
+        .logo-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-size: 40px;
+            color: white;
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
+        }
+
+        .app-name {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a2e;
+            margin-bottom: 8px;
+        }
+
+        .security-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #f0fdf4;
+            color: #16a34a;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .security-badge::before {
+            content: "🔒";
+        }
+
+        .confirm-card {
+            background: #f8fafc;
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 28px;
+            border: 2px solid #e2e8f0;
+        }
+
+        .device-info {
+            margin-bottom: 20px;
+        }
+
+        .device-label {
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 8px;
+            font-weight: 500;
+        }
+
+        .device-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1a1a2e;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .device-name::before {
+            content: "💻";
+            font-size: 20px;
+        }
+
+        .action-hint {
+            font-size: 14px;
+            color: #64748b;
+            line-height: 1.6;
+            padding: 12px;
+            background: white;
+            border-radius: 10px;
+            border-left: 3px solid #667eea;
+        }
+
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .btn-confirm {
+            width: 100%;
+            padding: 16px 24px;
+            font-size: 17px;
+            font-weight: 600;
+            color: white;
+            background: linear-gradient(135deg, #07c160 0%, #06ad56 100%);
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(7, 193, 96, 0.3);
+        }
+
+        .btn-confirm:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(7, 193, 96, 0.4);
+        }
+
+        .btn-confirm:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .btn-confirm:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-cancel {
+            width: 100%;
+            padding: 14px 24px;
+            font-size: 15px;
+            font-weight: 500;
+            color: #64748b;
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-cancel:hover:not(:disabled) {
+            background: #f8fafc;
+            border-color: #cbd5e1;
+        }
+
+        .btn-cancel:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .status-message {
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.6;
+            display: none;
+        }
+
+        .status-message.show {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+
+        .status-message.success {
+            background: #f0fdf4;
+            color: #16a34a;
+            border: 1px solid #bbf7d0;
+        }
+
+        .status-message.error {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+
+        .status-message.loading {
+            background: #eff6ff;
+            color: #2563eb;
+            border: 1px solid #bfdbfe;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ffffff;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .success-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            animation: scaleIn 0.5s ease;
+        }
+
+        @keyframes scaleIn {
+            from { transform: scale(0); }
+            to { transform: scale(1); }
+        }
+
+        .footer-text {
+            margin-top: 24px;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="mainContainer">
+        <div class="logo-section">
+            <div class="logo-icon">🤖</div>
+            <h1 class="app-name">EXO AI</h1>
+            <div class="security-badge">安全登录</div>
+        </div>
+
+        <div class="confirm-card" id="confirmCard">
+            <div class="device-info">
+                <div class="device-label">检测到来自电脑端的登录请求</div>
+                <div class="device-name">EXO AI 管理后台</div>
+            </div>
+            <div class="action-hint">
+                点击下方按钮确认后，将在该设备上登录你的账号
+            </div>
+        </div>
+
+        <div class="action-buttons" id="actionButtons">
+            <button class="btn-confirm" id="btnConfirm" onclick="confirmLogin()">
+                确认登录
+            </button>
+            <button class="btn-cancel" id="btnCancel" onclick="cancelLogin()">
+                取消
+            </button>
+        </div>
+
+        <div class="status-message" id="statusMessage"></div>
+
+        <div id="successState" style="display: none;">
+            <div class="success-icon">✅</div>
+            <h2 style="color: #1a1a2e; font-size: 22px; margin-bottom: 12px;">登录成功</h2>
+            <p style="color: #64748b; font-size: 15px; line-height: 1.6;">
+                已为你在管理后台完成登录<br>请返回电脑端查看
+            </p>
+        </div>
+
+        <div class="footer-text">
+            此操作将在电脑浏览器中登录你的账号
+        </div>
+    </div>
+
+    <script>
+        const QRCODE_ID = '{{QRCODE_ID}}';
+        const API_BASE = window.location.origin;
+
+        let isProcessing = false;
+
+        function showStatus(message, type = 'loading') {
+            const statusEl = document.getElementById('statusMessage');
+            statusEl.className = `status-message show ${type}`;
+
+            if (type === 'loading') {
+                statusEl.innerHTML = `<span class="spinner"></span>${message}`;
+            } else {
+                statusEl.innerHTML = message;
+            }
+        }
+
+        function hideStatus() {
+            const statusEl = document.getElementById('statusMessage');
+            statusEl.className = 'status-message';
+        }
+
+        function setButtonsDisabled(disabled) {
+            document.getElementById('btnConfirm').disabled = disabled;
+            document.getElementById('btnCancel').disabled = disabled;
+        }
+
+        async function confirmLogin() {
+            if (isProcessing || !QRCODE_ID) return;
+
+            isProcessing = true;
+            setButtonsDisabled(true);
+            showStatus('正在确认登录...', 'loading');
+
+            try {
+                const scanRes = await fetch(`${API_BASE}/login/qrcode/${QRCODE_ID}/scan`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        nickname: '微信用户',
+                        avatar: ''
+                    })
+                });
+
+                if (!scanRes.ok) {
+                    throw new Error('扫描失败：二维码可能已过期');
+                }
+
+                showStatus('正在完成登录验证...', 'loading');
+
+                const confirmRes = await fetch(`${API_BASE}/login/qrcode/${QRCODE_ID}/confirm`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        code: ''
+                    })
+                });
+
+                if (!confirmRes.ok) {
+                    const errorData = await confirmRes.json().catch(() => ({}));
+                    throw new Error(errorData.detail || '确认登录失败');
+                }
+
+                hideStatus();
+                document.getElementById('confirmCard').style.display = 'none';
+                document.getElementById('actionButtons').style.display = 'none';
+                document.getElementById('successState').style.display = 'block';
+
+            } catch (error) {
+                console.error('确认登录失败:', error);
+                showStatus(`❌ ${error.message}`, 'error');
+                setButtonsDisabled(false);
+                isProcessing = false;
+
+                setTimeout(() => {
+                    hideStatus();
+                }, 4000);
+            }
+        }
+
+        async function cancelLogin() {
+            if (isProcessing) return;
+
+            setButtonsDisabled(true);
+            showStatus('正在取消...', 'loading');
+
+            try {
+                await fetch(`${API_BASE}/login/qrcode/${QRCODE_ID}/cancel`, {
+                    method: 'POST'
+                });
+            } catch (e) {
+                console.log('取消请求失败:', e);
+            }
+
+            showStatus('已取消登录', 'success');
+
+            setTimeout(() => {
+                window.close();
+                try {
+                    WeixinJSBridge.call('closeWindow');
+                } catch (e) {}
+            }, 1500);
+        }
+
+        window.addEventListener('load', () => {
+            console.log('H5 确认页加载完成, QRCODE_ID:', QRCODE_ID);
+
+            if (!QRCODE_ID || QRCODE_ID === '{{QRCODE_ID}}') {
+                showStatus('❌ 缺少必要的参数', 'error');
+                setButtonsDisabled(true);
+            }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && !isProcessing) {
+                console.log('页面被隐藏');
+            }
+        });
+    </script>
+</body>
+</html>

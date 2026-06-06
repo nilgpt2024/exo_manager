@@ -1,0 +1,1495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EXO AI - 智能助手</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --user-primary: #0d9488;
+            --user-primary-light: #14b8a6;
+            --user-bg: #f0fdfa;
+            --user-surface: #ffffff;
+            --user-text: #134e4a;
+            --user-text-secondary: #5eead4;
+            --user-border: #99f6e4;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(13,148,140,0.1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: var(--user-bg);
+            color: var(--user-text);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* ========== 左侧边栏 ========== */
+        .sidebar {
+            width: 280px;
+            background: var(--user-surface);
+            border-right: 1px solid var(--user-border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header {
+            padding: 1.25rem 1.25rem 1rem;
+            border-bottom: 1px solid #f0fdfa;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.1rem;
+        }
+
+        .brand-text h2 { font-size: 1.15rem; font-weight: 700; }
+        .brand-text span { font-size: 0.72rem; color: #94a3b8; }
+
+        /* 用户信息 */
+        .user-profile {
+            margin: 1.25rem;
+            padding: 1rem;
+            background: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%);
+            border-radius: 16px;
+            border: 1px solid var(--user-border);
+        }
+
+        .profile-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .profile-avatar {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid white;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .profile-name { font-weight: 600; font-size: 0.95rem; }
+        .profile-role {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            font-size: 0.7rem;
+            color: var(--user-primary);
+            background: white;
+            padding: 0.15rem 0.55rem;
+            border-radius: 20px;
+            margin-top: 0.2rem;
+        }
+
+        /* 额度 */
+        .quota-mini {
+            margin: 0 1.25rem 1rem;
+            padding: 0.85rem 1rem;
+            background: white;
+            border-radius: 12px;
+            border: 1px solid var(--user-border);
+        }
+
+        .quota-mini-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .quota-mini-label { font-size: 0.78rem; color: #64748b; }
+        .quota-mini-value { font-size: 1.1rem; font-weight: 700; color: var(--user-primary); }
+
+        .quota-mini-bar {
+            height: 4px;
+            background: #e2e8f0;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .quota-mini-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--user-primary), var(--user-primary-light));
+            border-radius: 2px;
+            transition: width 0.5s ease;
+        }
+
+        /* 导航菜单 */
+        .nav-menu {
+            flex: 1;
+            padding: 0 0.75rem;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.85rem 1rem;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #475569;
+            transition: all 0.2s;
+            margin-bottom: 0.25rem;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+
+        .nav-item:hover { background: #f0fdfa; color: var(--user-primary); }
+        .nav-item.active {
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            color: white;
+            box-shadow: var(--shadow-md);
+        }
+
+        .nav-item i { width: 20px; text-align: center; font-size: 0.95rem; }
+
+        .sidebar-footer {
+            padding: 1rem 1.25rem;
+            border-top: 1px solid #f1f5f9;
+        }
+
+        .logout-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+            width: 100%;
+            padding: 0.7rem 1rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            background: white;
+            color: #64748b;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .logout-btn:hover { border-color: #ef4444; color: #ef4444; }
+
+        /* ========== 主内容区 ========== */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        /* 页面: AI 对话 */
+        .page-chat { display: flex; flex-direction: column; height: 100%; }
+        .page-hidden { display: none !important; }
+
+        .chat-header {
+            padding: 1rem 1.5rem;
+            background: white;
+            border-bottom: 1px solid var(--user-border);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .model-selector {
+            flex: 1;
+            max-width: 320px;
+        }
+
+        .model-select {
+            width: 100%;
+            padding: 0.55rem 1rem 0.55rem 2.5rem;
+            border: 1px solid var(--user-border);
+            border-radius: 10px;
+            font-size: 0.88rem;
+            color: var(--user-text);
+            background: white url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 12px center;
+            appearance: none;
+            cursor: pointer;
+        }
+
+        .chat-status {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.82rem;
+            color: #94a3b8;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #22c55e;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            scroll-behavior: smooth;
+        }
+
+        .msg-welcome {
+            max-width: 640px;
+            margin: 4rem auto 2rem;
+            text-align: center;
+        }
+
+        .msg-welcome-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            border-radius: 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .msg-welcome h3 { font-size: 1.35rem; margin-bottom: 0.5rem; }
+        .msg-welcome p { color: #64748b; font-size: 0.92rem; line-height: 1.6; }
+
+        .quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            justify-content: center;
+            margin-top: 1.25rem;
+        }
+
+        .quick-btn {
+            padding: 0.55rem 1rem;
+            background: white;
+            border: 1px solid var(--user-border);
+            border-radius: 20px;
+            font-size: 0.82rem;
+            color: #475569;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .quick-btn:hover { border-color: var(--user-primary); color: var(--user-primary); }
+
+        /* 消息气泡 */
+        .message {
+            display: flex;
+            margin-bottom: 1.25rem;
+            animation: msgIn 0.3s ease-out;
+        }
+
+        @keyframes msgIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user { flex-direction: row-reverse; }
+
+        .msg-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            flex-shrink: 0;
+            margin-top: 0.25rem;
+        }
+
+        .message.user .msg-avatar { background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; }
+        .message.assistant .msg-avatar { background: linear-gradient(135deg, var(--user-primary), var(--user-primary-light)); color: white; }
+
+        .msg-bubble {
+            max-width: 70%;
+            padding: 0.85rem 1.1rem;
+            border-radius: 18px;
+            line-height: 1.65;
+            font-size: 0.92rem;
+        }
+
+        .message.user .msg-bubble {
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .msg-bubble {
+            background: white;
+            color: var(--user-text);
+            border: 1px solid #e2e8f0;
+            border-bottom-left-radius: 4px;
+        }
+
+        .cursor-blink { animation: blink 1s step-end infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* 输入区域 */
+        .chat-input-wrapper {
+            padding: 1rem 1.5rem 1.5rem;
+            background: transparent;
+        }
+
+        .chat-input-box {
+            background: white;
+            border: 1px solid var(--user-border);
+            border-radius: 18px;
+            padding: 0.75rem 1rem;
+            display: flex;
+            align-items: flex-end;
+            gap: 0.75rem;
+            box-shadow: var(--shadow-md);
+            transition: border-color 0.2s;
+        }
+
+        .chat-input-box:focus-within { border-color: var(--user-primary); }
+
+        .chat-input {
+            flex: 1;
+            border: none;
+            outline: none;
+            resize: none;
+            font-size: 0.92rem;
+            line-height: 1.5;
+            max-height: 150px;
+            font-family: inherit;
+            color: var(--user-text);
+            background: transparent;
+        }
+
+        .send-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 12px;
+            border: none;
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            flex-shrink: 0;
+            transition: all 0.2s;
+        }
+
+        .send-btn:hover:not(:disabled) { transform: scale(1.05); }
+        .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .input-hint {
+            text-align: center;
+            font-size: 0.75rem;
+            color: #cbd5e1;
+            margin-top: 0.5rem;
+        }
+
+        /* 页面: API Keys */
+        .page-apikeys { padding: 2rem; overflow-y: auto; }
+
+        .api-page-header {
+            margin-bottom: 1.5rem;
+        }
+
+        .api-page-header h2 { font-size: 1.35rem; margin-bottom: 0.35rem; }
+        .api-page-header p { color: #64748b; font-size: 0.9rem; }
+
+        .api-endpoint-card {
+            background: white;
+            border: 1px solid var(--user-border);
+            border-radius: 16px;
+            padding: 1.25rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .endpoint-title { font-size: 0.85rem; color: #64748b; margin-bottom: 0.75rem; font-weight: 500; }
+
+        .endpoint-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.7rem 0;
+            border-bottom: 1px dashed #e2e8f0;
+        }
+
+        .endpoint-item:last-child { border-bottom: none; }
+
+        .endpoint-method {
+            padding: 0.2rem 0.55rem;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .method-post { background: #dcfce7; color: #166534; }
+        .method-get { background: #dbeafe; color: #1e40af; }
+
+        .endpoint-path {
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 0.84rem;
+            color: var(--user-text);
+            flex: 1;
+        }
+
+        .copy-tiny {
+            padding: 0.3rem 0.6rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            font-size: 0.78rem;
+            color: #64748b;
+            transition: all 0.2s;
+        }
+
+        .copy-tiny:hover { border-color: var(--user-primary); color: var(--user-primary); }
+
+        .keys-section h3 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .create-key-btn {
+            padding: 0.5rem 1.1rem;
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.82rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            transition: all 0.2s;
+        }
+
+        .create-key-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+
+        .key-card {
+            background: white;
+            border: 1px solid var(--user-border);
+            border-radius: 14px;
+            padding: 1.1rem 1.25rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: all 0.2s;
+        }
+
+        .key-card:hover { box-shadow: var(--shadow-sm); }
+
+        .key-info-left { display: flex; align-items: center; gap: 0.85rem; flex: 1; min-width: 0; }
+
+        .key-icon {
+            width: 40px;
+            height: 40px;
+            background: #f0fdfa;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--user-primary);
+            flex-shrink: 0;
+        }
+
+        .key-detail { min-width: 0; }
+        .key-name { font-weight: 600; font-size: 0.9rem; }
+        .key-value {
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-top: 0.2rem;
+            word-break: break-all;
+        }
+
+        .key-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+        .key-action-btn {
+            width: 34px;
+            height: 34px;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            color: #64748b;
+            font-size: 0.82rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .key-action-btn:hover { border-color: var(--user-primary); color: var(--user-primary); }
+        .key-action-btn.danger:hover { border-color: #ef4444; color: #ef4444; }
+
+        .empty-keys {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: #94a3b8;
+        }
+
+        .empty-keys i { font-size: 2.5rem; margin-bottom: 0.75rem; display: block; }
+        .empty-keys p { font-size: 0.9rem; }
+
+        /* 页面: 使用统计 */
+        .page-stats { padding: 2rem; overflow-y: auto; }
+
+        .stats-header {
+            margin-bottom: 1.5rem;
+        }
+
+        .stats-header h2 {
+            font-size: 1.35rem;
+            margin-bottom: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .stats-header p {
+            color: #64748b;
+            font-size: 0.9rem;
+        }
+
+        .stats-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .stat-card {
+            background: white;
+            border: 1px solid var(--user-border);
+            border-radius: 16px;
+            padding: 1.25rem;
+            transition: all 0.3s;
+        }
+
+        .stat-card:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
+        }
+
+        .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            color: white;
+            margin-bottom: 0.75rem;
+        }
+
+        .stat-icon.calls { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+        .stat-icon.tokens { background: linear-gradient(135deg, #f59e0b, #f97316); }
+        .stat-icon.success { background: linear-gradient(135deg, #10b981, #14b8a6); }
+        .stat-icon.latency { background: linear-gradient(135deg, #3b82f6, #06b6d4); }
+
+        .stat-label {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--user-text);
+        }
+
+        .stat-value.small {
+            font-size: 1.15rem;
+        }
+
+        .stat-change {
+            font-size: 0.78rem;
+            margin-top: 0.25rem;
+        }
+
+        .stat-change.positive { color: #10b981; }
+        .stat-change.negative { color: #ef4444; }
+
+        .stats-grid-2col {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.25rem;
+            margin-bottom: 1.5rem;
+        }
+
+        @media (max-width: 768px) {
+            .stats-grid-2col { grid-template-columns: 1fr; }
+        }
+
+        .stats-section-card {
+            background: white;
+            border: 1px solid var(--user-border);
+            border-radius: 16px;
+            padding: 1.25rem;
+        }
+
+        .section-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .model-stats-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .model-stats-table th,
+        .model-stats-table td {
+            padding: 0.75rem 0.5rem;
+            text-align: left;
+            border-bottom: 1px solid #f1f5f9;
+            font-size: 0.88rem;
+        }
+
+        .model-stats-table th {
+            color: #64748b;
+            font-weight: 600;
+            font-size: 0.82rem;
+            text-transform: uppercase;
+        }
+
+        .model-stats-table tr:hover {
+            background: #f8fafc;
+        }
+
+        .model-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.25rem 0.65rem;
+            background: #f0fdfa;
+            color: var(--user-primary);
+            border-radius: 20px;
+            font-size: 0.82rem;
+            font-weight: 500;
+        }
+
+        .history-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.85rem 0;
+            border-bottom: 1px dashed #e2e8f0;
+        }
+
+        .history-item:last-child { border-bottom: none; }
+
+        .history-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .history-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .history-status-dot.success { background: #10b981; }
+        .history-status-dot.error { background: #ef4444; }
+
+        .history-info { min-width: 0; }
+
+        .history-model {
+            font-weight: 500;
+            font-size: 0.88rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .history-time {
+            font-size: 0.78rem;
+            color: #94a3b8;
+            margin-top: 0.15rem;
+        }
+
+        .history-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-shrink: 0;
+            margin-left: 1rem;
+        }
+
+        .history-tokens {
+            font-size: 0.85rem;
+            color: #64748b;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+
+        .history-latency {
+            font-size: 0.8rem;
+            color: #94a3b8;
+        }
+
+        .empty-stats {
+            text-align: center;
+            padding: 3rem 1rem;
+            color: #94a3b8;
+        }
+
+        .empty-stats i { font-size: 2.5rem; margin-bottom: 0.75rem; display: block; }
+        .empty-stats p { font-size: 0.9rem; }
+
+        .days-selector {
+            display: flex;
+            gap: 0.5rem;
+            margin-left: auto;
+        }
+
+        .day-btn {
+            padding: 0.35rem 0.85rem;
+            border: 1px solid var(--user-border);
+            border-radius: 20px;
+            background: white;
+            color: #64748b;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .day-btn:hover { border-color: var(--user-primary); color: var(--user-primary); }
+        .day-btn.active {
+            background: var(--user-primary);
+            color: white;
+            border-color: var(--user-primary);
+        }
+
+        /* Toast */
+        .toast-container {
+            position: fixed;
+            top: 1.25rem;
+            right: 1.25rem;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .toast {
+            padding: 0.75rem 1.25rem;
+            border-radius: 12px;
+            font-size: 0.87rem;
+            color: white;
+            background: var(--user-text);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+            animation: toastIn 0.3s ease-out;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        @keyframes toastIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .sidebar { display: none; }
+            .main-content { width: 100%; }
+            .msg-bubble { max-width: 85%; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 左侧边栏 -->
+<aside class="sidebar">
+    <div class="sidebar-header">
+        <div class="brand">
+            <div class="brand-icon"><i class="fas fa-sparkles"></i></div>
+            <div class="brand-text">
+                <h2>EXO AI</h2>
+                <span>智能推理平台</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 用户信息 -->
+    <div class="user-profile">
+        <div class="profile-row">
+            <img class="profile-avatar" id="userAvatar" src="" alt="">
+            <div>
+                <div class="profile-name" id="userName">-</div>
+                <div class="profile-role"><i class="fas fa-user"></i> 用户</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 额度 -->
+    <div class="quota-mini">
+        <div class="quota-mini-header">
+            <span class="quota-mini-label">Token 额度</span>
+            <span class="quota-mini-value" id="quotaValue">--</span>
+        </div>
+        <div class="quota-mini-bar">
+            <div class="quota-mini-fill" id="quotaFill" style="width:0%"></div>
+        </div>
+    </div>
+
+    <!-- 导航菜单 -->
+    <nav class="nav-menu">
+        <button class="nav-item active" onclick="switchPage('chat')">
+            <i class="fas fa-message"></i> AI 对话
+        </button>
+        <button class="nav-item" onclick="switchPage('apikey')">
+            <i class="fas fa-code"></i> API 接口
+        </button>
+        <button class="nav-item" onclick="switchPage('stats')">
+            <i class="fas fa-chart-line"></i> 使用统计
+        </button>
+    </nav>
+
+    <div class="sidebar-footer">
+        <button class="logout-btn" onclick="logout()">
+            <i class="fas fa-right-from-bracket"></i> 退出登录
+        </button>
+    </div>
+</aside>
+
+
+<!-- 主内容区 -->
+<main class="main-content">
+
+    <!-- ====== AI 对话页面 ====== -->
+    <div id="pageChat" class="page-chat">
+        <header class="chat-header">
+            <div class="model-selector">
+                <select class="model-select" id="selectModel" onchange="onModelChange()">
+                    <option value="">选择模型...</option>
+                </select>
+            </div>
+            <div class="chat-status">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="chatStatusText">就绪</span>
+            </div>
+        </header>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="msg-welcome" id="welcomeMsg">
+                <div class="msg-welcome-icon"><i class="fas fa-wand-magic-sparkles"></i></div>
+                <h3>你好！我是 EXO AI 助手</h3>
+                <p>我可以帮你回答问题、撰写内容、编写代码等。<br>选择一个模型开始对话吧。</p>
+                <div class="quick-actions" id="quickActions">
+                    <button class="quick-btn" onclick="quickSend('帮我写一首关于春天的诗')">📝 写诗</button>
+                    <button class="quick-btn" onclick="quickSend('用 Python 写个快速排序算法')">💻 写代码</button>
+                    <button class="quick-btn" onclick="quickSend('解释一下量子计算的基本原理')">🔬 解释概念</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-input-wrapper">
+            <div class="chat-input-box">
+                <textarea
+                    class="chat-input"
+                    id="inputMessage"
+                    placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                    rows="1"
+                    onkeydown="handleKeyDown(event)"
+                    oninput="autoResize(this)"
+                ></textarea>
+                <button class="send-btn" id="btnSend" onclick="sendMessage()">
+                    <i class="fas fa-arrow-up"></i>
+                </button>
+            </div>
+            <div class="input-hint">AI 回复可能存在误差，请以实际结果为准 · 本次消耗: <strong id="tokenCost">0</strong> tokens</div>
+        </div>
+    </div>
+
+    <!-- ====== API 接口页面 ====== -->
+    <div id="pageApikey" class="page-apikeys page-hidden">
+        <div class="api-page-header">
+            <h2><i class="fas fa-plug" style="color:var(--user-primary);margin-right:0.4rem;"></i>API 接口</h2>
+            <p>通过 API 调用 AI 模型，集成到你的应用中</p>
+        </div>
+
+        <div class="api-endpoint-card">
+            <div class="endpoint-title"><i class="fas fa-link" style="margin-right:0.3rem;"></i>接口地址</div>
+            <div class="endpoint-item">
+                <span class="endpoint-method method-post">POST</span>
+                <span class="endpoint-path" id="epChat">/v1/chat/completions</span>
+                <button class="copy-tiny" onclick="copyText(epChat.textContent)">复制</button>
+            </div>
+            <div class="endpoint-item">
+                <span class="endpoint-method method-get">GET</span>
+                <span class="endpoint-path" id="epModels">/v1/models</span>
+                <button class="copy-tiny" onclick="copyText(epModels.textContent)">复制</button>
+            </div>
+            <div class="endpoint-item" style="border:none;margin-top:0.5rem;padding-top:0;">
+                <span style="font-size:0.78rem;color:#94a3b8;">Base URL:</span>
+                <code style="font-size:0.82rem;color:var(--user-text);flex:1;" id="baseUrlDisplay">-</code>
+                <button class="copy-tiny" onclick="copyText(baseUrlDisplay.textContent)">复制</button>
+            </div>
+        </div>
+
+        <div class="keys-section">
+            <h3>
+                我的 API Key
+                <button class="create-key-btn" onclick="createApiKey()"><i class="fas fa-plus"></i> 创建新 Key</button>
+            </h3>
+            <div id="apiKeyList">
+                <div class="empty-keys">
+                    <i class="fas fa-key"></i>
+                    <p>暂无 API Key</p>
+                    <p style="font-size:0.8rem;">点击上方按钮创建你的第一个 Key</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 使用统计页面 ====== -->
+    <div id="pageStats" class="page-stats page-hidden">
+        <div class="stats-header">
+            <h2>
+                <i class="fas fa-chart-line" style="color:var(--user-primary);"></i>
+                使用统计
+                <div class="days-selector">
+                    <button class="day-btn active" onclick="loadStats(7, this)">7天</button>
+                    <button class="day-btn" onclick="loadStats(30, this)">30天</button>
+                    <button class="day-btn" onclick="loadStats(90, this)">90天</button>
+                </div>
+            </h2>
+            <p>查看你的 API 调用情况和 Token 消耗记录</p>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="stats-cards" id="statsCards">
+            <div class="stat-card">
+                <div class="stat-icon calls"><i class="fas fa-phone"></i></div>
+                <div class="stat-label">API 调用次数</div>
+                <div class="stat-value" id="statTotalCalls">--</div>
+                <div class="stat-change positive" id="statSuccessRate">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon tokens"><i class="fas fa-coins"></i></div>
+                <div class="stat-label">Token 总消耗</div>
+                <div class="stat-value small" id="statTotalTokens">--</div>
+                <div class="stat-change" id="statTokenDetail">--</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon success"><i class="fas fa-check-circle"></i></div>
+                <div class="stat-label">成功调用</div>
+                <div class="stat-value" id="statSuccessCalls">--</div>
+                <div class="stat-change" id="statFailedCalls">失败: --</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon latency"><i class="fas fa-clock"></i></div>
+                <div class="stat-label">平均延迟</div>
+                <div class="stat-value small" id="statAvgLatency">--</div>
+                <div class="stat-change">每次请求</div>
+            </div>
+        </div>
+
+        <!-- 详细信息 -->
+        <div class="stats-grid-2col">
+            <!-- 模型使用分布 -->
+            <div class="stats-section-card">
+                <div class="section-title">
+                    <i class="fas fa-cubes" style="color:var(--user-primary);"></i>
+                    模型使用分布
+                </div>
+                <table class="model-stats-table" id="modelStatsTable">
+                    <thead>
+                        <tr>
+                            <th>模型</th>
+                            <th>调用次数</th>
+                            <th>Token消耗</th>
+                            <th>平均延迟</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modelStatsBody">
+                        <tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:2rem;">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- 最近调用历史 -->
+            <div class="stats-section-card">
+                <div class="section-title">
+                    <i class="fas fa-history" style="color:var(--user-primary);"></i>
+                    最近调用记录
+                </div>
+                <div class="history-list" id="historyList">
+                    <div class="empty-stats">
+                        <i class="fas fa-inbox"></i>
+                        <p>暂无调用记录</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</main>
+
+<!-- Toast 容器 -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+let currentUser = null;
+let availableModels = [];
+let selectedModel = '';
+let isStreaming = false;
+
+// ==================== 初始化 ====================
+async function init() {
+    await checkAuth();
+    if (!currentUser) return;
+
+    document.getElementById('baseUrlDisplay').textContent = location.origin;
+    loadQuota();
+    loadModels();
+}
+
+async function checkAuth() {
+    try {
+        const res = await fetch('/me');
+        if (res.ok) {
+            const data = await res.json();
+            currentUser = data.data;
+            document.getElementById('userName').textContent = currentUser.nickname || '用户';
+            document.getElementById('userAvatar').src = currentUser.avatar || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%230d9488"><circle cx="12" cy="8" r="4"/><path d="M12 14c-5 0-9 3-9 7v1h18v-1c0-4-4-7-9-7z"/></svg>';
+        } else {
+            window.location.href = '/login';
+        }
+    } catch (e) {
+        window.location.href = '/login';
+    }
+}
+
+function logout() {
+    fetch('/logout', { method: 'POST' }).finally(() => {
+        window.location.href = '/login';
+    });
+}
+
+// ==================== 页面切换 ====================
+function switchPage(page) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    event.currentTarget.classList.add('active');
+
+    document.getElementById('pageChat').classList.toggle('page-hidden', page !== 'chat');
+    document.getElementById('pageApikey').classList.toggle('page-hidden', page !== 'apikey');
+    document.getElementById('pageStats').classList.toggle('page-hidden', page !== 'stats');
+
+    if (page === 'apikey') loadApiKeys();
+    if (page === 'stats') loadStats(30);
+}
+
+// ==================== 额度 ====================
+async function loadQuota() {
+    try {
+        const res = await fetch('/v1/user/quota');
+        const data = await res.json();
+        if (data.success) {
+            const q = data.data;
+            const valEl = document.getElementById('quotaValue');
+            const fillEl = document.getElementById('quotaFill');
+
+            if (q.is_unlimited || q.remaining === -1) {
+                valEl.textContent = '∞ 无限';
+                fillEl.style.width = '0%';
+            } else {
+                valEl.textContent = q.remaining.toLocaleString();
+                const pct = Math.round(q.used_tokens / q.total_quota * 100);
+                fillEl.style.width = Math.min(pct, 100) + '%';
+
+                if (pct >= 90) fillEl.style.background = '#ef4444';
+            }
+        }
+    } catch (e) {}
+}
+
+// ==================== 模型 ====================
+async function loadModels() {
+    try {
+        const res = await fetch('/v1/models');
+        const data = await res.json();
+        if (data.data?.length) {
+            availableModels = data.data;
+            const sel = document.getElementById('selectModel');
+            data.data.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id || m.model_id;
+                opt.textContent = m.id || m.model_id;
+                sel.appendChild(opt);
+            });
+            if (availableModels.length > 0) {
+                selectedModel = availableModels[0].id || availableModels[0].model_id;
+                sel.value = selectedModel;
+            }
+        }
+    } catch (e) {}
+}
+
+function onModelChange() {
+    selectedModel = document.getElementById('selectModel').value;
+}
+
+// ==================== 对话功能 ====================
+function handleKeyDown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+    }
+}
+
+function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+}
+
+function quickSend(text) {
+    document.getElementById('inputMessage').value = text;
+    sendMessage();
+}
+
+function addMessage(content, role, streaming = false) {
+    const container = document.getElementById('chatMessages');
+    const welcome = document.getElementById('welcomeMsg');
+    if (welcome) welcome.style.display = 'none';
+
+    const id = 'msg_' + Date.now();
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    div.id = id;
+
+    const avatarIcon = role === 'user' ? 'fa-user' : 'fa-sparkles';
+    div.innerHTML = `
+        <div class="msg-avatar"><i class="fas ${avatarIcon}"></i></div>
+        <div class="msg-bubble">${content}${streaming ? '<span class="cursor-blink">▌</span>' : ''}</div>
+    `;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    return id;
+}
+
+function updateMessage(id, content) {
+    const el = document.getElementById(id);
+    if (el) el.querySelector('.msg-bubble').innerHTML = content;
+}
+
+function setChatStatus(text, state) {
+    document.getElementById('chatStatusText').textContent = text;
+    const dot = document.getElementById('statusDot');
+    dot.style.background = state === 'loading' ? '#f59e0b' : state === 'error' ? '#ef4444' : '#22c55e';
+}
+
+async function sendMessage() {
+    const input = document.getElementById('inputMessage');
+    const message = input.value.trim();
+    if (!message || !selectedModel || isStreaming) return;
+
+    input.value = '';
+    input.style.height = 'auto';
+    addMessage(message, 'user');
+
+    isStreaming = true;
+    setChatStatus('思考中...', 'loading');
+    document.getElementById('btnSend').disabled = true;
+
+    const assistantId = addMessage('', 'assistant', true);
+
+    try {
+        const res = await fetch('/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: selectedModel,
+                messages: [{ role: 'user', content: message }],
+                stream: true,
+            }),
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error?.message || err.detail || `HTTP ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = '';
+        let totalTokens = 0;
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            for (const line of chunk.split('\n')) {
+                if (line.startsWith('data: ')) {
+                    const d = line.slice(6).trim();
+                    if (d === '[DONE]') continue;
+                    try {
+                        const p = JSON.parse(d);
+                        const delta = p.choices?.[0]?.delta?.content || '';
+                        if (delta) {
+                            fullContent += delta;
+                            updateMessage(assistantId, fullContent + '<span class="cursor-blink">▌</span>');
+                        }
+                        if (p.usage) totalTokens = p.usage.total_tokens || 0;
+                    } catch (e) {}
+                }
+            }
+        }
+
+        updateMessage(assistantId, fullContent);
+        document.getElementById('tokenCost').textContent = totalTokens;
+        loadQuota();
+
+    } catch (e) {
+        updateMessage(assistantId, `<span style="color:#ef4444;">❌ ${e.message}</span>`);
+        showToast(e.message, 'error');
+    } finally {
+        isStreaming = false;
+        setChatStatus('就绪', 'ready');
+        document.getElementById('btnSend').disabled = false;
+    }
+}
+
+// ==================== API Key ====================
+async function loadApiKeys() {
+    try {
+        const res = await fetch('/v1/user/keys');
+        const data = await res.json();
+        const listEl = document.getElementById('apiKeyList');
+
+        if (!data.data?.length) return;
+
+        let html = '';
+        data.data.forEach(k => {
+            html += `
+                <div class="key-card">
+                    <div class="key-info-left">
+                        <div class="key-icon"><i class="fas fa-key"></i></div>
+                        <div class="key-detail">
+                            <div class="key-name">${k.name || '未命名'} ${k.is_active ? '' : '(已禁用)'}</div>
+                            <div class="key-value">${k.key}</div>
+                        </div>
+                    </div>
+                    <div class="key-actions">
+                        <button class="key-action-btn" onclick="copyText('${k.key}')" title="复制"><i class="fas fa-copy"></i></button>
+                        <button class="key-action-btn danger" onclick="revokeKey('${k.key}')" title="删除"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+            `;
+        });
+        listEl.innerHTML = html;
+    } catch (e) {}
+}
+
+async function createApiKey() {
+    const name = prompt('请输入 Key 名称:', '我的API Key');
+    if (!name) return;
+
+    try {
+        const res = await fetch('/v1/user/keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description: '' }),
+        });
+        const data = await res.json();
+
+        if (data.key) {
+            showToast('✅ Key 创建成功', 'success');
+            loadApiKeys();
+        } else {
+            showToast(data.message || '创建失败', 'error');
+        }
+    } catch (e) {
+        showToast('网络错误', 'error');
+    }
+}
+
+async function revokeKey(key) {
+    if (!confirm('确定要删除此 Key 吗？')) return;
+    try {
+        await fetch('/v1/user/keys/' + encodeURIComponent(key), { method: 'DELETE' });
+        showToast('已删除', 'success');
+        loadApiKeys();
+    } catch (e) {}
+}
+
+// ==================== 使用统计 ====================
+async function loadStats(days, btnEl) {
+    if (btnEl) {
+        document.querySelectorAll('.day-btn').forEach(b => b.classList.remove('active'));
+        btnEl.classList.add('active');
+    }
+
+    try {
+        const res = await fetch(`/v1/user/api/stats?days=${days || 30}`);
+        const data = await res.json();
+
+        if (data.success && data.data) {
+            renderStatsCards(data.data);
+            renderModelStats(data.data.by_model || []);
+        }
+
+        await loadHistory();
+    } catch (e) {
+        console.error('加载统计数据失败:', e);
+        showToast('加载统计数据失败', 'error');
+    }
+}
+
+function renderStatsCards(stats) {
+    document.getElementById('statTotalCalls').textContent = stats.total_api_calls?.toLocaleString() || '0';
+    document.getElementById('statSuccessRate').textContent =
+        `成功率 ${stats.success_rate || 0}%`;
+    document.getElementById('statTotalTokens').textContent =
+        formatTokens(stats.total_tokens_consumed || 0);
+    document.getElementById('statTokenDetail').textContent =
+        `输入: ${formatTokens(stats.input_tokens || 0)} / 输出: ${formatTokens(stats.output_tokens || 0)}`;
+    document.getElementById('statSuccessCalls').textContent = stats.successful_calls?.toLocaleString() || '0';
+    document.getElementById('statFailedCalls').textContent = `失败: ${stats.failed_calls || 0}`;
+    document.getElementById('statAvgLatency').textContent =
+        `${(stats.avg_latency_ms || 0).toFixed(1)} ms`;
+}
+
+function renderModelStats(models) {
+    const tbody = document.getElementById('modelStatsBody');
+
+    if (!models || models.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#94a3b8;padding:2rem;">暂无数据</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = models.map(m => `
+        <tr>
+            <td><span class="model-badge"><i class="fas fa-cube"></i> ${m.model_id}</span></td>
+            <td>${m.call_count?.toLocaleString() || 0}</td>
+            <td>${formatTokens(m.tokens_consumed || 0)}</td>
+            <td>${(m.avg_latency_ms || 0).toFixed(1)} ms</td>
+        </tr>
+    `).join('');
+}
+
+async function loadHistory() {
+    try {
+        const res = await fetch('/v1/user/api/history?limit=20');
+        const data = await res.json();
+        const listEl = document.getElementById('historyList');
+
+        if (!data.success || !data.data?.length) {
+            listEl.innerHTML = `
+                <div class="empty-stats">
+                    <i class="fas fa-inbox"></i>
+                    <p>暂无调用记录</p>
+                </div>
+            `;
+            return;
+        }
+
+        listEl.innerHTML = data.data.map(h => `
+            <div class="history-item">
+                <div class="history-left">
+                    <span class="history-status-dot ${h.status}"></span>
+                    <div class="history-info">
+                        <div class="history-model">${h.model_id || '-'}</div>
+                        <div class="history-time">${formatTime(h.created_at)}</div>
+                    </div>
+                </div>
+                <div class="history-right">
+                    <span class="history-tokens">${formatTokens(h.total_tokens || 0)}</span>
+                    <span class="history-latency">${(h.latency_ms || 0).toFixed(0)}ms</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        console.error('加载历史记录失败:', e);
+    }
+}
+
+function formatTokens(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+}
+
+function formatTime(timestamp) {
+    if (!timestamp) return '-';
+    const date = new Date(timestamp * 1000);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMin = Math.floor(diffMs / 60000);
+    const diffHour = Math.floor(diffMs / 3600000);
+    const diffDay = Math.floor(diffMs / 86400000);
+
+    if (diffMin < 1) return '刚刚';
+    if (diffMin < 60) return `${diffMin} 分钟前`;
+    if (diffHour < 24) return `${diffHour} 小时前`;
+    if (diffDay < 7) return `${diffDay} 天前`;
+
+    return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' }) +
+           ' ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+// ==================== 工具函数 ====================
+function copyText(text) {
+    navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'success'));
+}
+
+function showToast(msg, type = 'success') {
+    const c = document.getElementById('toastContainer');
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>${msg}`;
+    c.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+}
+
+init();
+</script>
+</body>
+</html>

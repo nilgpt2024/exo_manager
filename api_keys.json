@@ -1,0 +1,34 @@
+{
+  "keys": [
+    {
+      "key": "exo_sk_OQrMyz8Xq2-0orlfZqn_mrHS9vF0VlMm",
+      "name": "默认管理员 Key",
+      "description": "自动生成的默认 API Key，请妥善保管",
+      "created_at": 1778577097.8564992,
+      "last_used_at": null,
+      "is_active": true,
+      "permissions": [
+        "*"
+      ],
+      "allowed_models": [
+        "*"
+      ],
+      "usage_count": 0
+    },
+    {
+      "key": "exo_sk_CY9KCYIzS1MG7I5APgXuX5GXM3ZFkexn",
+      "name": "新 Key",
+      "description": "",
+      "created_at": 1778594829.805846,
+      "last_used_at": null,
+      "is_active": true,
+      "permissions": [
+        "*"
+      ],
+      "allowed_models": [
+        "*"
+      ],
+      "usage_count": 0
+    }
+  ]
+}

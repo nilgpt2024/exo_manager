@@ -1,0 +1,44 @@
+{
+  "users": [
+    {
+      "id": "de7b214c-b6a9-42e0-9b77-274629b0d5f6",
+      "union_id": "admin",
+      "openid": "",
+      "nickname": "管理员",
+      "avatar": "",
+      "role": "admin",
+      "is_disabled": false,
+      "created_at": 1778588776.1363726,
+      "last_login_at": 1780281689.1444976,
+      "website_account": "",
+      "website_password": "",
+      "website_password_hash": ""
+    },
+    {
+      "id": "231fd86a-a528-47ec-a146-e5014c0d54d1",
+      "union_id": "mini_69eb82f0326588b3",
+      "openid": "mini_69eb82f0326588b3",
+      "nickname": "微信用户",
+      "avatar": "",
+      "role": "user",
+      "is_disabled": false,
+      "created_at": 1778835308.617533,
+      "last_login_at": 1778835308.617533,
+      "website_account": "",
+      "website_password": "",
+      "website_password_hash": ""
+    }
+  ],
+  "sessions": {
+    "A-0pF0R_3XcDlCAFGC1vXaEw9hkHXDTpd683_e6miyE": {
+      "user_id": "de7b214c-b6a9-42e0-9b77-274629b0d5f6",
+      "created_at": 1780279787.5753238,
+      "expires_at": 1780884587.5753238
+    },
+    "4V8KiSv64FSZDxZM_QXsmy5uTYZIS62GU2TWsZjYDWs": {
+      "user_id": "de7b214c-b6a9-42e0-9b77-274629b0d5f6",
+      "created_at": 1780281689.146264,
+      "expires_at": 1780886489.146264
+    }
+  }
+}

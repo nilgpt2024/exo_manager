@@ -1,0 +1,25 @@
+# EXO Cluster Manager 依赖
+# =========================
+
+# Web框架
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+
+# 数据验证
+pydantic>=2.10.0
+
+# gRPC (用于连接EXO节点)
+grpcio>=1.68.0
+grpcio-tools>=1.68.0
+
+# HTTP客户端 (流式代理/认证请求)
+httpx>=0.28.0
+
+# 异步HTTP客户端 (测试/示例脚本)
+aiohttp>=3.10.0
+
+# 文件上传支持 (FastAPI表单)
+python-multipart>=0.0.12
+
+# 开发依赖 (可选)
+# pytest>=8.0.0
