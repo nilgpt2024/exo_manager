@@ -2993,11 +2993,22 @@ class NodeWSManager:
         """
         if node_id not in self.node_connections:
             raise Exception(f"Node {node_id} not connected via WebSocket")
-        
+
         import uuid
         request_id = f"ws_{uuid.uuid4().hex[:12]}"
         websocket = self.node_connections[node_id]
-        
+
+        # 检查连接是否仍然有效
+        try:
+            from starlette.websockets import WebSocketState
+            if websocket.client_state == WebSocketState.DISCONNECTED:
+                self.node_connections.pop(node_id, None)
+                raise Exception(f"Node {node_id} WebSocket 已断开")
+        except Exception as e:
+            if "WebSocket 已断开" in str(e):
+                raise
+            pass
+
         # 创建响应队列
         response_queue = asyncio.Queue()
         self.pending_requests[request_id] = response_queue
@@ -3200,11 +3211,22 @@ class NodeWSManager:
         """
         if node_id not in self.node_connections:
             raise Exception(f"Node {node_id} not connected via WebSocket")
-        
+
         import uuid
         request_id = f"ws_v2_{uuid.uuid4().hex[:12]}"
         websocket = self.node_connections[node_id]
-        
+
+        # 检查连接是否仍然有效
+        try:
+            from starlette.websockets import WebSocketState
+            if websocket.client_state == WebSocketState.DISCONNECTED:
+                self.node_connections.pop(node_id, None)
+                raise Exception(f"Node {node_id} WebSocket 已断开")
+        except Exception as e:
+            if "WebSocket 已断开" in str(e):
+                raise
+            pass
+
         # 创建响应队列（带大小限制，防止内存泄漏）
         response_queue = asyncio.Queue(maxsize=100)
         self.pending_requests[request_id] = response_queue
@@ -3436,9 +3458,19 @@ class NodeWSManager:
         """
         if node_id not in self.node_connections:
             return False
-        
+
         websocket = self.node_connections[node_id]
-        
+
+        # 检查连接是否仍然有效
+        try:
+            from starlette.websockets import WebSocketState
+            if websocket.client_state == WebSocketState.DISCONNECTED:
+                logger.warning(f"⚠️ [NodeWS] 节点 {node_id} 的 WebSocket 已断开，清理并跳过")
+                self.node_connections.pop(node_id, None)
+                return False
+        except Exception:
+            pass
+
         load_msg = {
             "type": "model_load",
             "task_id": task_id,
@@ -3475,9 +3507,19 @@ class NodeWSManager:
         """
         if node_id not in self.node_connections:
             return False
-        
+
         websocket = self.node_connections[node_id]
-        
+
+        # 检查连接是否仍然有效
+        try:
+            from starlette.websockets import WebSocketState
+            if websocket.client_state == WebSocketState.DISCONNECTED:
+                logger.warning(f"⚠️ [NodeWS] 节点 {node_id} 的 WebSocket 已断开，清理并跳过")
+                self.node_connections.pop(node_id, None)
+                return False
+        except Exception:
+            pass
+
         unload_msg = {
             "type": "model_unload",
             "model_id": model_id

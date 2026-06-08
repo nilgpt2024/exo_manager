@@ -28,7 +28,7 @@ import os
 import sys
 import time
 import uuid
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
@@ -865,7 +865,7 @@ class NodeConnector:
             
             if _is_ws_available() and _ws_mgr and _ws_mgr.is_node_connected(node_id):
                 logger.info(f"📡 [Inference] 使用 WebSocket 推送到节点 {node_id}")
-                
+
                 result_data = {
                     "success": True,
                     "node_id": node_id,
@@ -874,71 +874,79 @@ class NodeConnector:
                     "stream": stream,
                     "message": "WebSocket 推理已开始",
                 }
-                
+
                 full_text = ""
                 token_count = 0
-                
-                async for chunk_bytes in _ws_mgr.send_inference_request(
-                    node_id=node_id,
-                    request_data=request_data,
-                    timeout=600.0
-                ):
-                    chunk_str = chunk_bytes.decode('utf-8', errors='replace')
-                    
-                    if chunk_str.startswith('data: ') and chunk_str.strip() != 'data: [DONE]':
-                        data_str = chunk_str[6:].strip()
-                        if data_str == '[DONE]':
-                            logger.info(f"🏁 [Inference] WS 流结束")
-                            break
-                        
+                _FIRST_CHUNK_TIMEOUT = 30.0
+
+                try:
+                    _ws_iter = _ws_mgr.send_inference_request(
+                        node_id=node_id,
+                        request_data=request_data,
+                        timeout=600.0
+                    )
+                    _ws_aiter = _ws_iter.__aiter__()
+
+                    # 首块使用短超时：节点无响应时快速回退HTTP
+                    try:
+                        _first_chunk = await asyncio.wait_for(
+                            _ws_aiter.__anext__(), timeout=_FIRST_CHUNK_TIMEOUT
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(f"WS 首块超时({_FIRST_CHUNK_TIMEOUT}s), 回退到 HTTP")
+                        raise Exception(f"WS首块超时")
+
+                    # 处理首块及后续流
+                    chunk_bytes = _first_chunk
+                    while True:
+                        chunk_str = chunk_bytes.decode("utf-8", errors="replace")
+                        if chunk_str.startswith("data: ") and chunk_str.strip() != "data: [DONE]":
+                            data_str = chunk_str[6:].strip()
+                            if data_str == "[DONE]":
+                                logger.info("WS 流结束")
+                                break
+                            try:
+                                event_data = json.loads(data_str)
+                                if "error" in event_data:
+                                    err = event_data["error"]
+                                    logger.error(f"WS 推理错误: {err}")
+                                    yield {"success": False, "error": err.get("message", str(err)), "node_id": node_id, "request_id": request_id}
+                                    return
+                                delta = None
+                                if "choices" in event_data and len(event_data["choices"]) > 0:
+                                    choice = event_data["choices"][0]
+                                    delta = choice.get("delta", {})
+                                    if choice.get("finish_reason") in ("stop", "length"):
+                                        logger.info("WS 流结束 (finish_reason)")
+                                        break
+                                if delta and "content" in delta:
+                                    content = delta["content"]
+                                    if content:
+                                        full_text += content
+                                        token_count += 1
+                                        result_data["text"] = full_text
+                                        result_data["token_count"] = token_count
+                                        result_data["delta"] = content
+                                        yield result_data
+                            except json.JSONDecodeError:
+                                continue
                         try:
-                            event_data = json.loads(data_str)
-                            
-                            if 'error' in event_data:
-                                error_info = event_data['error']
-                                logger.error(f"[Inference] WS 推理错误: {error_info}")
-                                yield {
-                                    "success": False,
-                                    "error": error_info.get("message", str(error_info)),
-                                    "node_id": node_id,
-                                    "request_id": request_id,
-                                }
-                                return
-                            
-                            delta = None
-                            if 'choices' in event_data and len(event_data['choices']) > 0:
-                                choice = event_data['choices'][0]
-                                delta = choice.get('delta', {})
-                                finish_reason = choice.get('finish_reason')
-                                
-                                if finish_reason in ('stop', 'length'):
-                                    logger.info(f"🏁 [Inference] WS 流结束 (finish_reason={finish_reason})")
-                                    break
-                            
-                            if delta and 'content' in delta:
-                                content = delta['content']
-                                if content:
-                                    full_text += content
-                                    token_count += 1
-                                    
-                                    result_data["text"] = full_text
-                                    result_data["token_count"] = token_count
-                                    result_data["delta"] = content
-                                    
-                                    yield result_data
-                                    
-                        except json.JSONDecodeError:
-                            continue
-                    
-                result_data["text"] = full_text
-                result_data["token_count"] = token_count
-                result_data["finished"] = True
-                yield result_data
-                return
-                
-        except Exception as ws_e:
-            logger.warning(f"[Inference] WebSocket 推送失败 ({node_id}): {ws_e}, 回退到 HTTP")
-        
+                            chunk_bytes = await _ws_aiter.__anext__()
+                        except StopAsyncIteration:
+                            break
+
+                    result_data["text"] = full_text
+                    result_data["token_count"] = token_count
+                    result_data["finished"] = True
+                    yield result_data
+                    return
+
+                except Exception as ws_e:
+                    logger.warning(f"WebSocket 推送失败 ({node_id}): {ws_e}, 回退到 HTTP")
+
+        except Exception as ws_outer_e:
+            logger.warning(f"WebSocket 推理路径异常: {ws_outer_e}, 回退到 HTTP")
+
         # 2️⃣ 回退：HTTP POST（公网直连场景）
         logger.info(f"🌐 [Inference] 回退到 HTTP POST: {target_url}")
         
@@ -1203,7 +1211,11 @@ class EXOClusterManager:
         self._broadcast_callback = None
         self._instance_counter: Dict[str, int] = {}
         self.pending_tasks: Dict[str, List[Dict]] = {}
-        
+
+        # 分配注册表：记录每个模型的分片分配信息
+        # { base_model_id: { "allocations": [{node_id, start_layer, end_layer, instance_id}], "first_layer_node_id": str } }
+        self._allocation_registry: Dict[str, Dict] = {}
+
         from load_balancer import LoadBalancer
         self.load_balancer = LoadBalancer(self)
         
@@ -1219,6 +1231,87 @@ class EXOClusterManager:
     def set_broadcast_callback(self, callback):
         """设置状态更新广播回调（用于WebSocket推送）"""
         self._broadcast_callback = callback
+
+    def rebuild_allocation_registry(self):
+        """从各节点的 loaded_models 重建分配注册表
+
+        用于 exo_manager 重启后恢复首层节点信息。
+        扫描所有 connectors/nodes 的已加载模型，识别首层节点并重建 registry。
+        """
+        old_count = len(self._allocation_registry)
+        self._allocation_registry.clear()
+
+        # 按 base_model_id 收集所有实例
+        # { base_id: [(node_id, model_id, shard), ...] }
+        model_instances: Dict[str, List[Tuple[str, str, Dict]]] = {}
+
+        for node_id, connector in getattr(self, 'connectors', {}).items():
+            for model in connector.node_info.loaded_models:
+                model_id = model.get("model_id", "")
+                base_id = model_id.split("::")[0] if "::" in model_id else model_id
+                shard = model.get("shard", {})
+                if base_id not in model_instances:
+                    model_instances[base_id] = []
+                model_instances[base_id].append((node_id, model_id, shard))
+
+        # Fallback: 从 nodes 补充
+        if not model_instances and getattr(self, 'nodes', None):
+            for node_id, node_info in self.nodes.items():
+                if node_info.loaded_models:
+                    for m in node_info.loaded_models:
+                        model_id = m.get("model_id", "")
+                        base_id = model_id.split("::")[0] if "::" in model_id else model_id
+                        shard = m.get("shard", {})
+                        if base_id not in model_instances:
+                            model_instances[base_id] = []
+                        model_instances[base_id].append((node_id, model_id, shard))
+
+        # 为每个模型找首层节点，重建注册表
+        for base_id, instances in model_instances.items():
+            first_node_id = None
+            inference_url = ""
+            alloc_entries = []
+
+            for node_id, model_id, shard in instances:
+                start_layer = shard.get("start_layer", -1)
+                end_layer = shard.get("end_layer", -1)
+                n_layers = shard.get("n_layers", -1)
+
+                alloc_entries.append({
+                    "node_id": node_id,
+                    "start_layer": start_layer,
+                    "end_layer": end_layer,
+                    "instance_id": model_id,
+                })
+
+                # 识别首层节点：start_layer == 0 或没有分片信息（单节点）
+                if start_layer == 0 or (start_layer == -1 and len(instances) == 1):
+                    first_node_id = node_id
+
+            if first_node_id and alloc_entries:
+                # 构建推理地址
+                node_info = self.nodes.get(first_node_id)
+                if node_info:
+                    inference_url = node_info.chat_completions_url or ""
+
+                self._allocation_registry[base_id] = {
+                    "allocations": alloc_entries,
+                    "first_layer_node_id": first_node_id,
+                    "inference_url": inference_url,
+                    "full_model_id": base_id,
+                    "updated_at": time.time(),
+                }
+
+        new_count = len(self._allocation_registry)
+        if new_count > 0:
+            logger.info(
+                f"🔄 [分配注册表重建] 完成: {new_count} 个模型 "
+                f"(旧值: {old_count}) | "
+                + ", ".join(
+                    f"{mid}→{info['first_layer_node_id']}"
+                    for mid, info in self._allocation_registry.items()
+                )
+            )
     
     def _generate_instance_id(self, model_id: str) -> str:
         """
@@ -1493,22 +1586,49 @@ class EXOClusterManager:
     async def _monitor_loop(self):
         """后台监控循环 - 定期检查所有节点状态"""
         logger.info("🔄 监控循环已启动")
+        _first_sync_done = False  # 首次同步标记，用于重建分配注册表
+        _sync_cycle_count = 0     # 同步周期计数器，用于定期重建注册表
+        _REGISTRY_REBUILD_INTERVAL = 3  # 每 3 个监控周期（约30秒）重建一次注册表
         while self._running:
             try:
                 online_count = 0
                 total_memory = 0
-                
+                registry_changed = False  # 标记本轮是否有变化需要重建
+
                 for node_id, connector in list(self.connectors.items()):
                     is_healthy = await connector.health_check()
-                    
+
                     if is_healthy:
                         online_count += 1
                         node_info = self.nodes[node_id]
                         total_memory += node_info.device_info.get('memory', 0)
-                        
+
                         # 定期从节点获取最新状态（已加载模型、显存使用等）
                         logger.debug(f"📊 正在获取节点 {node_id} 的实时状态...")
+                        old_model_count = len(connector.node_info.loaded_models)
                         await connector._fetch_loaded_models()
+                        # 检测模型列表是否发生变化
+                        if len(connector.node_info.loaded_models) != old_model_count:
+                            registry_changed = True
+
+                # 首次同步完成后，从节点数据重建分配注册表（重启恢复）
+                if not _first_sync_done and online_count > 0:
+                    _first_sync_done = True
+                    self.rebuild_allocation_registry()
+                    logger.info("📋 [监控循环] 首次同步完成，已重建分配注册表")
+                
+                # 定期重建分配注册表（确保首层节点信息与实际状态同步）
+                _sync_cycle_count += 1
+                if _first_sync_done and (registry_changed or _sync_cycle_count >= _REGISTRY_REBUILD_INTERVAL):
+                    old_registry_size = len(self._allocation_registry)
+                    self.rebuild_allocation_registry()
+                    new_registry_size = len(self._allocation_registry)
+                    logger.info(
+                        f"📋 [监控循环] 分配注册表已定期重建: "
+                        f"{old_registry_size} -> {new_registry_size} 个模型"
+                        f"{' (检测到模型变化)' if registry_changed else ''}"
+                    )
+                    _sync_cycle_count = 0
                 
                 # 更新统计数据
                 self.stats.update({
@@ -1848,11 +1968,24 @@ class EXOClusterManager:
             success_count = sum(1 for r in results if r.get("success"))
             total = len(results)
             
+            # 查找首层节点（start_layer=0），其推理地址可直接用于客户端直连
+            inference_url = ""
+            first_layer_node_id = None
+            for alloc in allocation.allocations:
+                if alloc.get("start_layer") == 0:
+                    first_layer_node_id = alloc["node_id"]
+                    fl_connector = self.connectors.get(first_layer_node_id)
+                    if fl_connector and fl_connector.node_info.status == NodeStatus.ONLINE:
+                        inference_url = fl_connector.node_info.chat_completions_url
+                    break
+
             return {
                 "success": success_count > 0,
                 "model_id": model_id,
                 "instance_id": instance_id,
                 "full_model_id": full_model_id,
+                "inference_url": inference_url,          # 首层节点推理地址（客户端可直连）
+                "first_layer_node_id": first_layer_node_id,  # 首层节点ID
                 "allocation": {
                     "strategy": strategy,
                     "total_layers": n_layers,
@@ -1866,6 +1999,26 @@ class EXOClusterManager:
                     "total_nodes": total
                 }
             }
+
+            # ✅ 注册分配信息到 _allocation_registry（供 /v1/models 查询首层节点）
+            if success_count > 0 and allocation.allocations:
+                alloc_entries = []
+                for alloc in allocation.allocations:
+                    alloc_entries.append({
+                        "node_id": alloc.get("node_id", ""),
+                        "start_layer": alloc.get("start_layer", -1),
+                        "end_layer": alloc.get("end_layer", -1),
+                        "instance_id": instance_id,
+                    })
+                self._allocation_registry[model_id] = {
+                    "allocations": alloc_entries,
+                    "first_layer_node_id": first_layer_node_id,
+                    "inference_url": inference_url,
+                    "full_model_id": full_model_id,
+                    "n_layers": n_layers,
+                    "updated_at": time.time(),
+                }
+                logger.info(f"📋 [分配注册] 模型 {model_id} -> 首层节点: {first_layer_node_id}, 推理地址: {inference_url}")
             
         except Exception as e:
             logger.error(f"❌ 加载模型失败: {e}")
@@ -1934,6 +2087,8 @@ class EXOClusterManager:
                     "full_model_id": result.get("full_model_id", f"{model_id}::unknown-{i}"),
                     "success": result.get("success", False),
                     "allocation": result.get("allocation"),
+                    "inference_url": result.get("inference_url", ""),       # 首层节点推理地址
+                    "first_layer_node_id": result.get("first_layer_node_id"),  # 首层节点ID
                     "error": result.get("error")
                 }
                 
@@ -1969,9 +2124,20 @@ class EXOClusterManager:
         
         logger.info(f"✅ [BatchLoad] 批量加载完成: {model_id} -> 成功 {success_count}/{count}")
         
+        # 提取首个成功实例的首层节点信息（供顶层快速访问）
+        top_inference_url = ""
+        top_first_layer_node_id = ""
+        for inst in instances_results:
+            if inst.get("success") and inst.get("inference_url"):
+                top_inference_url = inst["inference_url"]
+                top_first_layer_node_id = inst.get("first_layer_node_id", "")
+                break
+
         return {
             "success": success_count > 0,
             "model_id": model_id,
+            "inference_url": top_inference_url,              # 首层节点推理地址（客户端可直连）
+            "first_layer_node_id": top_first_layer_node_id,  # 首层节点ID
             "instances": instances_results,
             "summary": summary
         }
@@ -2032,6 +2198,11 @@ class EXOClusterManager:
                     "error": str(e)
                 })
         
+        # 清理分配注册表
+        if model_id in self._allocation_registry:
+            del self._allocation_registry[model_id]
+            logger.info(f"🗑️ [分配注册] 已移除模型 {model_id} 的分配记录")
+
         return {
             "success": any(r["success"] for r in results),
             "model_id": model_id,

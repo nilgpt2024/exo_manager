@@ -247,7 +247,16 @@ def _get_manager():
 
 
 def _get_available_models_for_inference() -> List[Dict]:
-    """获取所有可用于推理的已加载模型"""
+    """获取所有可用于推理的已加载模型
+
+    数据来源（按优先级）：
+    1. manager._allocation_registry - 分配注册表（含准确的首层节点信息）
+    2. manager.connectors - 在线节点的 loaded_models
+    3. manager.nodes - 所有节点信息（fallback）
+
+    每个模型附带 inference_url（首层节点推理地址），客户端可直连该地址发起推理，
+    请求会自动在分片节点间传递，无需经过 exo_manager 代理。
+    """
     manager = _get_manager()
     if not manager:
         return []
@@ -255,6 +264,17 @@ def _get_available_models_for_inference() -> List[Dict]:
     models = []
     seen_models = set()
 
+    # ── 第一步：从分配注册表获取首层节点信息（最可靠的数据源）──
+    # key: base_model_id, value: (node_id, inference_url)
+    first_layer_map = {}
+    alloc_registry = getattr(manager, '_allocation_registry', {})
+    for base_model_id, alloc_info in alloc_registry.items():
+        fl_node_id = alloc_info.get("first_layer_node_id", "")
+        fl_url = alloc_info.get("inference_url", "")
+        if fl_node_id and fl_url:
+            first_layer_map[base_model_id] = (fl_node_id, fl_url)
+
+    # ── 第二步：收集所有已加载的模型列表 ──
     for node_id, connector in getattr(manager, 'connectors', {}).items():
         if connector.node_info.status.value != "online":
             continue
@@ -265,9 +285,36 @@ def _get_available_models_for_inference() -> List[Dict]:
                 models.append({
                     "model_id": model_id,
                     "node_id": node_id,
-                    "node_url": connector.node_info.http_url,
+                    "node_url": connector.node_info.chatgpt_url,
                     "type": "worker_instance" if "::" in model_id else "base",
                 })
+
+    # Fallback: 从 manager.nodes 补充
+    if not models and getattr(manager, 'nodes', None):
+        for node_id, node_info in manager.nodes.items():
+            if node_info.loaded_models:
+                for m in node_info.loaded_models:
+                    model_id = m.get("model_id", "unknown")
+                    if model_id not in seen_models:
+                        seen_models.add(model_id)
+                        models.append({
+                            "model_id": model_id,
+                            "node_id": node_id,
+                            "node_url": node_info.chatgpt_url,
+                            "type": "worker_instance" if "::" in model_id else "base",
+                        })
+
+    # ── 第三步：为每个模型附加上首层推理地址 ──
+    for m in models:
+        base_id = m["model_id"].split("::")[0] if "::" in m["model_id"] else m["model_id"]
+        if base_id in first_layer_map:
+            m["inference_url"] = first_layer_map[base_id][1]
+            m["first_layer_node_id"] = first_layer_map[base_id][0]
+        else:
+            # 分配注册表中没有，尝试从 shard 信息推断（gRPC 数据可能不完整）
+            m["inference_url"] = ""
+            m["first_layer_node_id"] = ""
+
     return models
 
 
@@ -861,7 +908,11 @@ async def completions(
 
 @router.get("/models")
 async def list_models(api_key: str = Depends(verify_api_key)):
-    """OpenAI 兼容模型列表接口"""
+    """OpenAI 兼容模型列表接口
+
+    每个模型附带 inference_url（首层节点推理地址），
+    客户端可直接 POST 该地址发起推理，无需经过 exo_manager 代理。
+    """
     models = _get_available_models_for_inference()
     data = []
     for m in models:
@@ -874,6 +925,9 @@ async def list_models(api_key: str = Depends(verify_api_key)):
             "permission": [],
             "root": model_id,
             "parent": None,
+            # 首层节点直连信息
+            "inference_url": m.get("inference_url", ""),
+            "first_layer_node_id": m.get("first_layer_node_id", ""),
         })
     return {"object": "list", "data": data}
 
@@ -887,6 +941,9 @@ async def get_model(model_id: str, api_key: str = Depends(verify_api_key)):
     if model_id not in available_ids:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
+    # 查找该模型的首层节点信息
+    model_info = next((m for m in models if m["model_id"] == model_id), None)
+
     return {
         "id": model_id,
         "object": "model",
@@ -895,6 +952,8 @@ async def get_model(model_id: str, api_key: str = Depends(verify_api_key)):
         "permission": [],
         "root": model_id,
         "parent": None,
+        "inference_url": model_info.get("inference_url", "") if model_info else "",
+        "first_layer_node_id": model_info.get("first_layer_node_id", "") if model_info else "",
     }
 
 

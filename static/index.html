@@ -2147,6 +2147,52 @@
                 </div>
             </div>
 
+            <!-- 首层节点直连地址 -->
+            <div id="inferenceUrlSection" style="background: linear-gradient(135deg, #eff6ff, #f0fdf4); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; border: 1px solid #bbf7d0;">
+                <h3 style="font-size: 0.9rem; margin-bottom: 0.75rem; color: #166534;">
+                    <i class="fas fa-bolt" style="color: #22c55e;"></i> 首层节点直连（推荐）
+                    <span style="font-weight: normal; font-size: 0.75rem; color: #16a34a; margin-left: 0.5rem;">绕过 manager，直连首层节点推理</span>
+                </h3>
+
+                <!-- 节点地址列表 -->
+                <div id="inferenceUrlList" style="display: grid; gap: 0.5rem; font-size: 0.85rem; margin-bottom: 1rem;">
+                    <p style="text-align: center; color: #9ca3af; padding: 0.5rem;"><i class="fas fa-spinner fa-spin"></i> 加载中...</p>
+                </div>
+
+                <!-- 推理测试面板 -->
+                <div style="background:white; border-radius:8px; padding:0.85rem; border:1px solid #dcfce7;">
+                    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.6rem;">
+                        <label style="font-weight:600; font-size:0.82rem; color:#166534; white-space:nowrap;">
+                            <i class="fas fa-flask"></i> 直连测试
+                        </label>
+                        <select id="directInferenceUrlSelect" style="
+                            flex:1; padding:0.4rem 0.5rem; border:1px solid #bbf7d0;
+                            border-radius:5px; font-size:0.8rem; background:#f0fdf4; color:#15803d;
+                            outline:none;
+                        " onchange="onDirectUrlChange()">
+                            <option value="">-- 选择首层节点 --</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; gap:0.5rem; align-items:flex-end;">
+                        <textarea id="directTestInput" placeholder="输入测试消息..." rows="2" style="
+                            flex:1; padding:0.5rem; border:1px solid #d1d5db; border-radius:6px;
+                            resize:none; font-size:0.85rem; outline:none;
+                            font-family:inherit; min-height:38px;
+                        " onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDirectTest();}"></textarea>
+                        <button id="directSendBtn" onclick="sendDirectTest()" class="btn btn-primary btn-sm" style="
+                            padding:0.5rem 0.85rem; height:auto; white-space:nowrap;
+                        "><i class="fas fa-paper-plane"></i> 发送</button>
+                    </div>
+                    <!-- 测试结果 -->
+                    <div id="directTestResult" style="
+                        margin-top:0.6rem; max-height:200px; overflow-y:auto;
+                        display:none; background:#f9fafb; border-radius:6px;
+                        padding:0.6rem; border:1px solid #e5e7eb; font-size:0.83rem;
+                        line-height:1.55; color:#374151; white-space:pre-wrap; word-break:break-word;
+                    "></div>
+                </div>
+            </div>
+
             <!-- API Key 列表 -->
             <div id="apiKeyList">
                 <p style="text-align: center; color: var(--gray-400); padding: 2rem;">
@@ -2164,7 +2210,18 @@
                 </h2>
             </div>
             <div style="background: var(--gray-900); color: #e5e7eb; border-radius: 8px; padding: 1rem; overflow-x: auto;">
-                <pre style="margin: 0; font-size: 0.8rem; line-height: 1.5;"><code>curl -X POST <span id="exampleBaseUrl"></span>/v1/chat/completions \\
+                <pre style="margin: 0; font-size: 0.8rem; line-height: 1.5;"><code># 方式1: 通过 exo_manager 代理（默认）
+curl -X POST <span id="exampleBaseUrl"></span>/v1/chat/completions \\
+  -H "Authorization: Bearer &lt;your-api-key&gt;" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "qwen-3-0.6b",
+    "messages": [{"role": "user", "content": "你好"}],
+    "stream": true
+  }'
+
+# 方式2: 直连首层节点（推荐，绕过 manager）
+curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
   -H "Authorization: Bearer &lt;your-api-key&gt;" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -4158,7 +4215,7 @@
                 
                 loadedModelsCache = modelsArray;
 
-                // 按 model_id 分组，每个模型只显示第一个实例的详情
+                // 按 model_id 分组，每个模型显示所有实例的详情
                 const modelGroups = {};
                 modelsArray.forEach(model => {
                     const mid = model.model_id;
@@ -4172,30 +4229,20 @@
 
                 Object.keys(modelGroups).forEach(modelId => {
                     const instances = modelGroups[modelId];
-                    // 只取第一个实例显示详情
-                    const model = instances[0];
                     const instanceCount = instances.length;
                     
-                    const nodeId = model.node_id || 'unknown';
-                    const shardInfo = model.shard_info || model.shard || {};
-                    const startLayer = shardInfo.start_layer;
-                    const endLayer = shardInfo.end_layer;
-                    const nLayers = shardInfo.n_layers;
-                    
-                    const hasShard = typeof startLayer === 'number' && typeof endLayer === 'number' && typeof nLayers === 'number' && nLayers > 0;
-                    const shortNodeId = nodeId.length > 12 ? nodeId.slice(0, 10) + '..' : nodeId;
-                    
-                    const layerText = hasShard ? `L${startLayer}-${endLayer} / ${nLayers}层` : '已加载';
-                    const barLeft = hasShard ? (startLayer / nLayers * 100) : 0;
-                    const barWidth = hasShard ? ((endLayer - startLayer + 1) / nLayers * 100) : 100;
-
-                    // 多实例时显示额外标签
+                    // 多实例标签
                     const multiInstanceBadge = instanceCount > 1 
                         ? `<span class="badge" style="background:#f59e0b; color:white; margin-left:0.5rem; font-size:0.7rem;" title="共 ${instanceCount} 个实例分布在不同节点">
                                <i class="fas fa-clone"></i> ${instanceCount}节点
                            </span>` 
                         : '';
-                    
+
+                    // 用第一个实例的 n_layers 作为参考
+                    const firstInstance = instances[0];
+                    const firstShardInfo = firstInstance.shard_info || firstInstance.shard || {};
+                    const nLayers = firstShardInfo.n_layers || 0;
+
                     html += `
                         <div class="model-card" style="
                             padding: 1rem; 
@@ -4216,10 +4263,6 @@
                                         </span>
                                         ${multiInstanceBadge}
                                     </h4>
-                                    <div style="display:flex; gap:1rem; font-size:0.82rem; color:var(--gray-600); flex-wrap:wrap;">
-                                        <span><i class="fas fa-server"></i> ${escapeHtml(shortNodeId)}</span>
-                                        <span><i class="fas fa-layer-group"></i> ${layerText}</span>
-                                    </div>
                                 </div>
                                 <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
                                     <button onclick="showInstancesPanel('${escapeHtml(modelId)}')" 
@@ -4236,19 +4279,56 @@
                                     </button>
                                 </div>
                             </div>
-                            
-                            <!-- 分片可视化条 -->
-                            <div style="margin-top:0.75rem;">
-                                <div style="height:6px; background:var(--gray-200); border-radius:3px; overflow:hidden; position:relative;">
-                                    <div style="
-                                        position:absolute; left:${barLeft}%; width:${barWidth}%;
-                                        height:100%; background:linear-gradient(90deg, var(--primary), var(--info));
-                                        border-radius:3px;
-                                    "></div>
+
+                            <!-- 每个实例独立显示一行 -->
+                            <div style="margin-top:0.75rem; display:flex; flex-direction:column; gap:0.5rem;">`;
+
+                    // 遍历渲染每个实例
+                    instances.forEach((model, idx) => {
+                        const nodeId = model.node_id || 'unknown';
+                        const instanceId = model.instance_id || 'default';
+                        const shardInfo = model.shard_info || model.shard || {};
+                        const startLayer = shardInfo.start_layer;
+                        const endLayer = shardInfo.end_layer;
+                        const instanceNLayers = shardInfo.n_layers || nLayers;
+
+                        const hasShard = typeof startLayer === 'number' && typeof endLayer === 'number' && typeof instanceNLayers === 'number' && instanceNLayers > 0;
+                        const shortNodeId = nodeId.length > 12 ? nodeId.slice(0, 10) + '..' : nodeId;
+                        
+                        const layerText = hasShard ? `L${startLayer}-${endLayer} / ${instanceNLayers}层` : '已加载';
+                        const barLeft = hasShard ? (startLayer / instanceNLayers * 100) : 0;
+                        const barWidth = hasShard ? ((endLayer - startLayer + 1) / instanceNLayers * 100) : 100;
+
+                        // 实例标识（非 default 时显示）
+                        const instanceLabel = instanceId !== 'default' 
+                            ? `<span class="badge" style="background:#e0e7ff; color:#3730a3; font-size:0.65rem;"><i class="fas fa-code-branch"></i> ${escapeHtml(instanceId)}</span>` 
+                            : '';
+
+                        const instanceBg = idx % 2 === 0 ? '#ffffff' : '#f8fafc';
+
+                        html += `
+                            <div style="padding:0.5rem 0.75rem; border-radius:8px; background:${instanceBg}; border:1px solid #e5e7eb;">
+                                <div style="display:flex; gap:1rem; font-size:0.82rem; color:var(--gray-600); flex-wrap:wrap; align-items:center;">
+                                    <span><i class="fas fa-server"></i> ${escapeHtml(shortNodeId)}</span>
+                                    ${instanceLabel}
+                                    <span><i class="fas fa-layer-group"></i> ${layerText}</span>
                                 </div>
-                                <div style="display:flex; justify-content:space-between; font-size:0.7rem; color:var(--gray-400); margin-top:2px;">
-                                    <span>L0</span><span>L${nLayers}</span>
+                                <div style="margin-top:0.4rem;">
+                                    <div style="height:5px; background:#e5e7eb; border-radius:3px; overflow:hidden; position:relative;">
+                                        <div style="
+                                            position:absolute; left:${barLeft}%; width:${barWidth}%;
+                                            height:100%; background:linear-gradient(90deg, ${idx % 2 === 0 ? 'var(--primary), var(--info)' : '#10b981, #34d399'});
+                                            border-radius:3px;
+                                        "></div>
+                                    </div>
+                                    <div style="display:flex; justify-content:space-between; font-size:0.65rem; color:var(--gray-400); margin-top:1px;">
+                                        <span>L0</span><span>L${instanceNLayers}</span>
+                                    </div>
                                 </div>
+                            </div>`;
+                    });
+
+                    html += `
                             </div>
                             
                             <!-- 实例列表 (可展开) -->
@@ -5841,6 +5921,9 @@
             document.getElementById('apiBaseUrl').textContent = baseUrl;
             document.getElementById('exampleBaseUrl').textContent = baseUrl;
 
+            // 加载首层节点直连地址
+            loadInferenceUrls();
+
             try {
                 const res = await fetch(getApiKeyEndpoint());
                 const data = await res.json();
@@ -5914,6 +5997,205 @@
 
             } catch (e) {
                 listEl.innerHTML = `<p style="text-align:center; color:var(--danger); padding:2rem;">加载失败: ${e.message}</p>`;
+            }
+        }
+
+        // 加载首层节点直连地址
+        async function loadInferenceUrls() {
+            const container = document.getElementById('inferenceUrlList');
+            const selectEl = document.getElementById('directInferenceUrlSelect');
+            if (!container) return;
+
+            try {
+                const res = await fetch('/v1/models');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                const models = data.data || [];
+
+                // 筛选有 inference_url 的模型，按 base_model_id 去重
+                const seen = {};
+                const uniqueModels = [];
+                for (const m of models) {
+                    const baseId = m.id.split('::')[0];
+                    if (!seen[baseId] && m.inference_url) {
+                        seen[baseId] = true;
+                        uniqueModels.push(m);
+                    }
+                }
+
+                if (uniqueModels.length === 0) {
+                    container.innerHTML = `
+                        <p style="text-align:center; color:#9ca3af; padding:0.5rem;">
+                            <i class="fas fa-plug" style="opacity:0.4;"></i>
+                            暂无已加载的模型（或首层节点未在线）
+                        </p>
+                    `;
+                    // 清空下拉框
+                    if (selectEl) {
+                        selectEl.innerHTML = '<option value="">-- 选择首层节点 --</option>';
+                    }
+                    return;
+                }
+
+                let html = '';
+                let selectOptions = '<option value="">-- 选择首层节点 --</option>';
+
+                for (const m of uniqueModels) {
+                    const urlEscaped = escapeHtml(m.inference_url);
+                    html += `
+                    <div style="display:flex; align-items:center; gap:0.5rem; background:white; border-radius:6px; padding:0.5rem 0.75rem; border:1px solid #dcfce7;">
+                        <span style="color:#166534; font-weight:600; min-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(m.id)}">${escapeHtml(m.id)}</span>
+                        <code style="background:#f0fdf4; color:#15803d; padding:0.2rem 0.5rem; border-radius:4px; flex:1; font-size:0.8rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${urlEscaped}">${urlEscaped}</code>
+                        <button onclick="copyToClipboard('${urlEscaped}')" class="btn btn-outline btn-sm" style="padding:0.2rem 0.4rem; color:#16a34a; border-color:#86efac;" title="复制地址">
+                            <i class="fas fa-copy"></i>
+                        </button>
+                        <button onclick="selectDirectUrl('${urlEscaped}', '${escapeHtml(m.id)}')" class="btn btn-outline btn-sm" style="padding:0.2rem 0.4rem; color:#2563eb; border-color:#93c5fd;" title="选中测试">
+                            <i class="fas fa-play"></i>
+                        </button>
+                        <span style="color:#9ca3af; font-size:0.75rem;" title="首层节点: ${escapeHtml(m.first_layer_node_id || '')}">
+                            <i class="fas fa-server"></i> ${escapeHtml(m.first_layer_node_id || '-')}
+                        </span>
+                    </div>`;
+                    // 填充下拉框选项
+                    selectOptions += `<option value="${m.inference_url}" data-model-id="${escapeHtml(m.id)}">${escapeHtml(m.id)} @ ${m.first_layer_node_id || '?'}</option>`;
+                }
+                container.innerHTML = html;
+
+                // 填充下拉框
+                if (selectEl) {
+                    selectEl.innerHTML = selectOptions;
+                }
+
+            } catch (e) {
+                container.innerHTML = `<p style="text-align:center; color:#ef4444; padding:0.5rem;">加载失败: ${escapeHtml(e.message)}</p>`;
+            }
+        }
+
+        // 选中某个地址用于测试
+        function selectDirectUrl(url, modelId) {
+            const sel = document.getElementById('directInferenceUrlSelect');
+            if (sel) {
+                for (let i = 0; i < sel.options.length; i++) {
+                    if (sel.options[i].value === url) {
+                        sel.selectedIndex = i;
+                        break;
+                    }
+                }
+            }
+            document.getElementById('directTestInput').focus();
+            showToast(`已选中: ${modelId}`, 'success');
+        }
+
+        function onDirectUrlChange() {
+            // 下拉切换时可以做一些联动，暂无特殊逻辑
+        }
+
+        // 直连推理测试
+        let directTestAbortController = null;
+
+        async function sendDirectTest() {
+            const inputEl = document.getElementById('directTestInput');
+            const resultEl = document.getElementById('directTestResult');
+            const sendBtn = document.getElementById('directSendBtn');
+            const urlSelect = document.getElementById('directInferenceUrlSelect');
+
+            const message = inputEl.value.trim();
+            const targetUrl = urlSelect ? urlSelect.value : '';
+
+            if (!message) { showToast('请输入测试消息', 'warning'); return; }
+            if (!targetUrl) { showToast('请先选择首层节点', 'warning'); return; }
+
+            // 取消上一次请求
+            if (directTestAbortController) directTestAbortController.abort();
+
+            directTestAbortController = new AbortController();
+
+            // UI 状态更新
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 推理中...';
+            resultEl.style.display = 'block';
+            resultEl.style.color = '#6b7280';
+            resultEl.textContent = '正在连接首层节点...\n';
+
+            inputEl.value = '';
+
+            const selectedOption = urlSelect.options[urlSelect.selectedIndex];
+            const modelId = selectedOption ? (selectedOption.dataset.modelId || targetUrl) : targetUrl;
+
+            try {
+                // inference_url 已包含完整路径（如 http://x:52415/v1/chat/completions），直接使用
+                const endpoint = targetUrl.replace(/\/+$/, '');
+
+                resultEl.textContent += `POST ${endpoint}\n模型: ${modelId}\n消息: ${message}\n--- 响应 ---\n`;
+
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: modelId,
+                        messages: [{ role: 'user', content: message }],
+                        stream: true,
+                        max_tokens: 512,
+                        temperature: 0.7
+                    }),
+                    signal: directTestAbortController.signal
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text().catch(() => '');
+                    resultEl.style.color = '#dc2626';
+                    resultEl.textContent += `\n❌ 错误 ${response.status}: ${errText.slice(0, 500)}`;
+                    return;
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let fullContent = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+                        const dataStr = trimmed.slice(6).trim();
+                        if (dataStr === '[DONE]') continue;
+
+                        try {
+                            const chunk = JSON.parse(dataStr);
+                            const delta = chunk.choices?.[0]?.delta?.content;
+                            if (delta) {
+                                fullContent += delta;
+                                resultEl.style.color = '#374151';
+                                resultEl.textContent = resultEl.textContent.replace(/--- 响应 ---[\s\S]*$/, `--- 响应 ---\n${fullContent}`);
+                                // 自动滚动到底部
+                                resultEl.scrollTop = resultEl.scrollHeight;
+                            }
+                        } catch (e) { /* 忽略解析错误 */ }
+                    }
+                }
+
+                resultEl.style.color = '#166534';
+                resultEl.textContent += `\n\n✅ 完成 (${fullContent.length} 字符)`;
+
+            } catch (e) {
+                if (e.name === 'AbortError') {
+                    resultEl.style.color = '#f59e0b';
+                    resultEl.textContent += '\n⚠️ 已取消';
+                } else {
+                    resultEl.style.color = '#dc2626';
+                    resultEl.textContent += `\n❌ 请求失败: ${e.message}`;
+                }
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.innerHTML = '<i class="fas fa-paper-plane"></i> 发送';
+                directTestAbortController = null;
             }
         }
 
