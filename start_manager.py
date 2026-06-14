@@ -36,22 +36,34 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-def print_banner(host, port, mode):
+def print_banner(host, port, mode, frp_info=None):
     """打印启动横幅"""
     display_host = host if host != '0.0.0.0' else 'localhost'
-    
+
     mode_emoji = {
         "zero-config": "🚀",
         "config-file": "📋",
         "auto-discover": "🔍"
     }.get(mode, "🚀")
-    
+
     mode_desc = {
         "zero-config": "零配置模式（通过Web界面添加节点）",
         "config-file": "配置文件模式（自动加载预定义节点）",
         "auto-discover": "自动发现模式（扫描局域网）"
     }.get(mode, "")
-    
+
+    # FRP 信息行
+    frp_lines = ""
+    if frp_info:
+        token_preview = frp_info.get("token", "")
+        bind_port = frp_info.get("bind_port", 7000)
+        preview = token_preview[:8] + "..." + token_preview[-4:] if len(token_preview) > 12 else token_preview
+        frp_lines = f"""
+║   🌐 FRP Server                                           ║
+║      • 监听端口: {bind_port:<44}
+║      • Token: {preview:<50}
+║      • 节点连接: 用户登录后在「节点连接」页面获取启动命令          ║"""
+
     print(f"""
 ╔═════════════════════════════════════════════════════════╗
 ║                                                           ║
@@ -62,12 +74,12 @@ def print_banner(host, port, mode):
 ╠═════════════════════════════════════════════════════════╣
 ║                                                           ║
 ║   📍 服务地址                                              ║
-║      • Web界面: http://{display_host}:{port}                
-║      • API文档: http://{display_host}:{port}/docs        
-║      • WebSocket: ws://{display_host}:{port}/ws/cluster  
+║      • Web界面: http://{display_host}:{port}
+║      • API文档: http://{display_host}:{port}/docs
+║      • WebSocket: ws://{display_host}:{port}/ws/cluster
 ║                                                           ║
-║   ⚙️ 启动模式: {mode_desc:<44} 
-║                                                           ║
+║   ⚙️ 启动模式: {mode_desc:<44}
+{frp_lines}
 ╚═════════════════════════════════════════════════════════╝
 """.format(display_host=display_host, port=port, mode=mode_desc))
 
@@ -148,16 +160,46 @@ def main():
     
     # 其他参数
     parser.add_argument(
-        "--reload", 
+        "--reload",
         action="store_true",
         help="开发模式：启用代码热重载"
     )
-    
+
     parser.add_argument(
-        "--workers", 
-        type=int, 
+        "--workers",
+        type=int,
         default=1,
         help="工作进程数 (默认: 1)"
+    )
+
+    # ==================== FRP Server 相关参数 ====================
+    frp_group = parser.add_argument_group("FRP Server (内网穿透服务端)")
+
+    frp_group.add_argument(
+        "--frp-enable",
+        action="store_true",
+        help="启用 FRP Server 服务 (启动时自动运行 frps)"
+    )
+
+    frp_group.add_argument(
+        "--frp-bind-port",
+        type=int,
+        default=7000,
+        help="frps 监听端口 (默认: 7000)"
+    )
+
+    frp_group.add_argument(
+        "--frp-token",
+        type=str,
+        default=None,
+        help="frps 认证 Token (不指定则自动随机生成 32 位 hex)"
+    )
+
+    frp_group.add_argument(
+        "--frp-dashboard-port",
+        type=int,
+        default=0,
+        help="frps Dashboard 端口 (0=不启用, 默认: 0)"
     )
     
     parser.add_argument(
@@ -168,7 +210,21 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
+    # ==================== FRP Token 生成 (在横幅打印前) ====================
+    frp_info = None
+    if args.frp_enable:
+        if not args.frp_token:
+            # 自动随机生成 32 位 hex token
+            import secrets
+            args.frp_token = secrets.token_hex(16)  # 32 字符
+        frp_info = {
+            "token": args.frp_token,
+            "bind_port": args.frp_bind_port,
+        }
+        print(f"  🔑 FRP Token 已自动生成: {args.frp_token}")
+        print(f"     ⚠️  请保存此 Token，节点连接时需要使用\n")
+
     # 确定启动模式
     if args.config:
         startup_mode = "config-file"
@@ -183,8 +239,8 @@ def main():
     else:
         startup_mode = "zero-config"
     
-    # 打印启动信息
-    print_banner(args.host, args.port, startup_mode)
+    # 打印启动信息（含 FRP 信息）
+    print_banner(args.host, args.port, startup_mode, frp_info=frp_info)
     
     # 设置环境变量供server使用
     os.environ['EXO_MANAGER_HOST'] = args.host
@@ -192,6 +248,14 @@ def main():
     os.environ['EXO_MANAGER_CONFIG'] = args.config or ''
     os.environ['EXO_MANAGER_MODE'] = startup_mode
     os.environ['EXO_MANAGER_LOG_LEVEL'] = args.log_level
+
+    # FRP Server 环境变量（供 server.py startup 使用）
+    os.environ['EXO_FRP_ENABLE'] = str(args.frp_enable).lower()
+    os.environ['EXO_FRP_BIND_PORT'] = str(args.frp_bind_port)
+    if args.frp_token:
+        os.environ['EXO_FRP_TOKEN'] = args.frp_token
+    if args.frp_dashboard_port and args.frp_dashboard_port > 0:
+        os.environ['EXO_FRP_DASHBOARD_PORT'] = str(args.frp_dashboard_port)
     
     # 如果是自动发现模式，先执行扫描
     if args.auto_discover:

@@ -198,14 +198,13 @@ class LoadBalancer:
                 except Exception as e:
                     logger.warning(f"[LoadBalancer] get_model_instances 方法调用失败: {e}，回退到 nodes 遍历")
             
-            seen_full_ids = set()
+            # 按 (node_id, base_model_id) 粒度去重
+            # - 同一节点的同一基础模型只保留一个实例（单节点多分片场景）
+            # - 不同节点的同模型各自独立（多节点多副本场景，支持负载均衡）
+            seen_node_base = set()  # {(node_id, base_id), ...}
             for node_id, node_info in self.manager.nodes.items():
                 for model in node_info.loaded_models:
                     model_id = model.get("model_id", "unknown")
-                    
-                    if model_id in seen_full_ids:
-                        continue
-                    seen_full_ids.add(model_id)
                     
                     # 解析基础模型ID和实例ID
                     if "::" in model_id:
@@ -215,6 +214,12 @@ class LoadBalancer:
                     else:
                         base_id = model_id
                         inst_id = "default"
+                    
+                    # 按 (node_id, base_model_id) 去重：同一节点的同模型只保留一个入口
+                    node_base_key = (node_id, base_id)
+                    if node_base_key in seen_node_base:
+                        continue
+                    seen_node_base.add(node_base_key)
                     
                     shard = model.get("shard", {})
                     start_layer = shard.get("start_layer", 0)

@@ -54,9 +54,21 @@ import secrets
 import time
 import uuid as uuid_lib
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict, field
 import httpx
+
+# 安全的密码哈希库 (bcrypt)
+try:
+    import bcrypt
+    _BCRYPT_AVAILABLE = True
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("bcrypt 未安装，将使用 PBKDF2 作为后备方案。建议运行: pip install bcrypt")
+    _BCRYPT_AVAILABLE = False
+    import hashlib
+    import base64
+    import os
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +78,216 @@ SESSION_EXPIRY = 7 * 24 * 3600  # 7 天
 # 安全配置
 MAX_LOGIN_ATTEMPTS = 5          # 最大登录尝试次数
 LOGIN_LOCKOUT_TIME = 900        # 锁定时间 (秒) = 15分钟
-PASSWORD_SALT = "exo_cluster_salt_v1"  # 密码哈希盐值 (生产环境应使用随机盐)
+# 注意: 已移除静态盐值 PASSWORD_SALT，现在使用 bcrypt/PBKDF2 自动生成随机盐
+
+# ==================== 密码策略配置 ====================
+class PasswordPolicy:
+    """
+    密码复杂度策略管理器
+
+    支持从环境变量或代码配置密码策略:
+    - 最小长度
+    - 最大长度
+    - 必须包含大写字母
+    - 必须包含小写字母
+    - 必须包含数字
+    - 必须包含特殊字符
+    - 密码有效期 (天)
+    - 禁止使用的常见弱密码列表
+    """
+
+    # 默认策略
+    DEFAULT_MIN_LENGTH = 8
+    DEFAULT_MAX_LENGTH = 128
+    REQUIRE_UPPERCASE = True
+    REQUIRE_LOWERCASE = True
+    REQUIRE_DIGIT = True
+    REQUIRE_SPECIAL = True
+    SPECIAL_CHARS = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+
+    # 密码有效期 (0 表示永不过期)
+    PASSWORD_EXPIRY_DAYS = int(os.getenv("EXO_PASSWORD_EXPIRY_DAYS", "90"))  # 默认90天
+
+    # 常见弱密码黑名单
+    COMMON_WEAK_PASSWORDS = {
+        "password", "123456", "12345678", "qwerty", "abc123",
+        "monkey", "1234567", "letmein", "trustno1", "dragon",
+        "baseball", "iloveyou", "master", "sunshine", "ashley",
+        "bailey", "passw0rd", "shadow", "123123", "654321",
+        "superman", "qazwsx", "michael", "football", "password1",
+        "password123", "admin", "admin123", "root", "welcome",
+        "login", "hello", "charlie", "donald", "qwerty123"
+    }
+
+    @classmethod
+    def validate(cls, password: str) -> Tuple[bool, List[str]]:
+        """
+        验证密码是否符合策略要求
+
+        Args:
+            password: 待验证的密码
+
+        Returns:
+            (is_valid, error_messages) - 错误消息列表为空表示验证通过
+        """
+        errors = []
+
+        # 长度检查
+        min_len = int(os.getenv("EXO_PASSWORD_MIN_LENGTH", str(cls.DEFAULT_MIN_LENGTH)))
+        max_len = int(os.getenv("EXO_PASSWORD_MAX_LENGTH", str(cls.DEFAULT_MAX_LENGTH)))
+
+        if len(password) < min_len:
+            errors.append(f"密码长度至少 {min_len} 位")
+        if len(password) > max_len:
+            errors.append(f"密码长度不能超过 {max_len} 位")
+
+        # 复杂度检查 (可通过环境变量禁用)
+        if os.getenv("EXO_PASSWORD_REQUIRE_COMPLEXITY", "true").lower() in ("true", "1"):
+            has_uppercase = any(c.isupper() for c in password)
+            has_lowercase = any(c.islower() for c in password)
+            has_digit = any(c.isdigit() for c in password)
+            has_special = any(c in cls.SPECIAL_CHARS for c in password)
+
+            if cls.REQUIRE_UPPERCASE and not has_uppercase:
+                errors.append("密码必须包含至少一个大写字母")
+            if cls.REQUIRE_LOWERCASE and not has_lowercase:
+                errors.append("密码必须包含至少一个小写字母")
+            if cls.REQUIRE_DIGIT and not has_digit:
+                errors.append("密码必须包含至少一个数字")
+            if cls.REQUIRE_SPECIAL and not has_special:
+                errors.append(f"密码必须包含至少一个特殊字符 ({cls.SPECIAL_CHARS})")
+
+        # 弱密码检查
+        if password.lower() in cls.COMMON_WEAK_PASSWORDS:
+            errors.append("该密码过于简单，请使用更复杂的密码")
+
+        return len(errors) == 0, errors
+
+    @classmethod
+    def get_strength_score(cls, password: str) -> Dict[str, Any]:
+        """
+        计算密码强度评分
+
+        Returns:
+            包含评分和详细信息的字典
+        """
+        score = 0
+        feedback = []
+
+        # 长度评分 (0-25分)
+        length = len(password)
+        if length >= 12:
+            score += 25
+        elif length >= 8:
+            score += 18
+        elif length >= 6:
+            score += 10
+        else:
+            feedback.append("密码过短")
+
+        # 字符多样性评分 (0-40分)
+        has_upper = any(c.isupper() for c in password)
+        has_lower = any(c.islower() for c in password)
+        has_digit = any(c.isdigit() for c in password)
+        has_special = any(c in cls.SPECIAL_CHARS for c in password)
+
+        diversity = sum([has_upper, has_lower, has_digit, has_special])
+        score += diversity * 10
+
+        if diversity < 2:
+            feedback.append("建议混合使用多种字符类型")
+
+        # 奖励/惩罚项 (0-35分)
+        # 连续字符惩罚
+        import re
+        if re.search(r'(.)\1{2,}', password):
+            score -= 10
+            feedback.append("避免使用连续重复的字符")
+
+        # 常见模式惩罚
+        common_patterns = ['123', 'abc', 'qwe', 'asd', 'zxc']
+        for pattern in common_patterns:
+            if pattern in password.lower():
+                score -= 5
+                break
+
+        # 长度奖励
+        if length > 16:
+            score += 10
+
+        # 归一化到 0-100
+        final_score = max(0, min(100, score))
+
+        # 强度等级
+        if final_score >= 80:
+            strength = "非常强"
+        elif final_score >= 60:
+            strength = "强"
+        elif final_score >= 40:
+            strength = "中等"
+        elif final_score >= 20:
+            strength = "弱"
+        else:
+            strength = "非常弱"
+
+        return {
+            "score": final_score,
+            "strength": strength,
+            "feedback": feedback,
+            "length": length,
+            "has_uppercase": has_upper,
+            "has_lowercase": has_lower,
+            "has_digit": has_digit,
+            "has_special": has_special,
+        }
+
+    @classmethod
+    def is_password_expired(cls, last_change_time: float) -> bool:
+        """
+        检查密码是否已过期
+
+        Args:
+            last_change_time: 最后修改密码的时间戳
+
+        Returns:
+            是否过期
+        """
+        if cls.PASSWORD_EXPIRY_DAYS <= 0:
+            return False
+
+        age_days = (time.time() - last_change_time) / 86400
+        return age_days > cls.PASSWORD_EXPIRY_DAYS
+
+    @classmethod
+    def get_password_expiry_info(cls, last_change_time: float) -> Dict[str, Any]:
+        """
+        获取密码过期信息
+
+        Returns:
+            过期详情字典
+        """
+        if cls.PASSWORD_EXPIRY_DAYS <= 0:
+            return {"expires": False, "message": "密码永不过期"}
+
+        age_days = (time.time() - last_change_time) / 86400
+        remaining_days = max(0, cls.PASSWORD_EXPIRY_DAYS - age_days)
+
+        is_expired = age_days > cls.PASSWORD_EXPIRY_DAYS
+        is_warning = not is_expired and remaining_days <= 14  # 14天内过期时警告
+
+        return {
+            "expires": cls.PASSWORD_EXPIRY_DAYS > 0,
+            "expiry_days": cls.PASSWORD_EXPIRY_DAYS,
+            "age_days": round(age_days, 1),
+            "remaining_days": round(remaining_days, 1),
+            "is_expired": is_expired,
+            "is_expiring_soon": is_warning,
+            "message": (
+                "密码已过期，请立即修改" if is_expired else
+                f"密码将在 {int(remaining_days)} 天后过期" if is_warning else
+                f"密码有效，剩余 {int(remaining_days)} 天"
+            )
+        }
 
 
 @dataclass
@@ -84,6 +305,7 @@ class User:
     website_account: str = ""
     website_password: str = ""
     website_password_hash: str = ""
+    password_changed_at: float = 0.0  # 密码最后修改时间 (用于过期检查)
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -140,11 +362,39 @@ class AuthManager:
         self._load_data()
 
     def _load_wechat_config(self):
-        """加载微信登录配置"""
+        """
+        加载微信登录配置
+
+        安全改进: 优先从环境变量读取敏感配置 (AppSecret)
+        环境变量优先级高于配置文件
+        """
+        # 1. 尝试从环境变量读取 (推荐生产环境)
+        env_app_id = os.getenv("WECHAT_APP_ID", "").strip()
+        env_app_secret = os.getenv("WECHAT_APP_SECRET", "").strip()
+
+        if env_app_id and env_app_secret:
+            logger.info("✅ 从环境变量加载微信配置 (安全模式)")
+            self.wechat_config = {
+                "app_id": env_app_id,
+                "app_secret": env_app_secret,
+                "redirect_uri": os.getenv(
+                    "WECHAT_REDIRECT_URI",
+                    "http://localhost:8080/auth/wechat/callback"
+                ),
+                "scope": os.getenv("WECHAT_SCOPE", "snsapi_login"),
+                "state_prefix": os.getenv("WECHAT_STATE_PREFIX", "exo_"),
+                "mini_appid": os.getenv("WECHAT_MINI_APPID", ""),
+                "mini_secret": os.getenv("WECHAT_MINI_SECRET", ""),
+            }
+            self.wechat_enabled = True
+            logger.info(f"微信登录已启用 (AppID: {env_app_id[:8]}...)")
+            return
+
+        # 2. 回退到配置文件 (开发模式)
         config_path = Path(__file__).parent / "wechat_config.json"
 
         if not config_path.exists():
-            logger.warning("微信配置文件不存在，将使用模拟登录模式")
+            logger.warning("微信配置文件不存在且未设置环境变量，将使用模拟登录模式")
             self.wechat_enabled = False
             return
 
@@ -161,6 +411,14 @@ class AuthManager:
                 self.wechat_enabled = False
                 return
 
+            # ⚠️ 安全警告: 从配置文件读取密钥 (仅建议用于开发)
+            if os.getenv("EXO_ENV", "").lower() in ("production", "prod"):
+                logger.error("❌ 生产环境检测到从配置文件读取微信密钥，请改用环境变量!")
+                self.wechat_enabled = False
+                return
+
+            logger.warning("⚠️ 从配置文件加载微信密钥 (仅用于开发环境)")
+
             self.wechat_config = {
                 "app_id": app_id,
                 "app_secret": app_secret,
@@ -170,6 +428,8 @@ class AuthManager:
                 ),
                 "scope": wechat.get("scope", "snsapi_login"),
                 "state_prefix": wechat.get("state_prefix", "exo_"),
+                "mini_appid": wechat.get("mini_appid", ""),
+                "mini_secret": wechat.get("mini_secret", ""),
             }
             self.wechat_enabled = True
             logger.info(f"微信登录已启用 (AppID: {app_id[:8]}...)")
@@ -626,9 +886,11 @@ class AuthManager:
             except Exception as e:
                 logger.error(f"微信 jscode2session 异常: {e}")
         else:
-            logger.info("小程序 AppID 未配置，使用开发模式（code md5 作为 openid）")
-        
-        return f"mini_{hashlib.md5(code.encode()).hexdigest()[:16]}"
+            logger.info("小程序 AppID 未配置，使用开发模式（code hash 作为 openid）")
+            # 安全改进: 使用 SHA-256 替代 MD5
+            # 开发模式下生成确定性但安全的 openid
+            code_hash = hashlib.sha256(f"mini_dev_{code}".encode()).hexdigest()[:32]
+            return f"mini_{code_hash}"
 
     def wechat_mini_login(
         self,
@@ -771,9 +1033,80 @@ class AuthManager:
 
     @staticmethod
     def hash_password(password: str) -> str:
-        """使用 SHA-256 + 盐值哈希密码"""
-        salted = f"{PASSWORD_SALT}:{password}"
-        return hashlib.sha256(salted.encode('utf-8')).hexdigest()
+        """
+        使用 bcrypt (或 PBKDF2 后备) 哈希密码
+
+        安全改进:
+        - 每个密码使用随机盐值
+        - bcrypt 工作因子 12 (约 250ms/次)
+        - PBKDF2 后备方案: 100000 次迭代 + SHA-256
+        """
+        if _BCRYPT_AVAILABLE:
+            # bcrypt: 自动处理盐值生成和存储
+            salt = bcrypt.gensalt(rounds=12)
+            hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+            return hashed.decode('utf-8')
+        else:
+            # PBKDF2 后备方案 (当 bcrypt 未安装时)
+            salt = os.urandom(32)  # 256 位随机盐
+            iterations = 100000   # 高迭代次数抵抗暴力破解
+            derived_key = hashlib.pbkdf2_hmac(
+                'sha256',
+                password.encode('utf-8'),
+                salt,
+                iterations,
+                dklen=32
+            )
+            # 格式: $pbkdf2-sha256$iterations$salt_base64$hash_base64
+            return f"$pbkdf2-sha256${iterations}${base64.b64encode(salt).decode()}{base64.b64encode(derived_key).decode()}"
+
+    @staticmethod
+    def verify_password(password: str, hashed: str) -> bool:
+        """
+        验证密码是否匹配哈希值
+
+        支持格式:
+        - $2b$... (bcrypt)
+        - $pbkdf2-sha256$... (PBKDF2 后备)
+        - 旧格式 SHA-256 (向后兼容，建议迁移)
+        """
+        if not password or not hashed:
+            return False
+
+        try:
+            if _BCRYPT_AVAILABLE and hashed.startswith('$2b$'):
+                # bcrypt 验证
+                return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+            elif hashed.startswith('$pbkdf2-sha256$'):
+                # PBKDF2 验证
+                parts = hashed.split('$')
+                if len(parts) != 5:
+                    return False
+                iterations = int(parts[2])
+                salt = base64.b64decode(parts[3])
+                stored_hash = parts[4]
+                derived_key = hashlib.pbkdf2_hmac(
+                    'sha256',
+                    password.encode('utf-8'),
+                    salt,
+                    iterations,
+                    dklen=32
+                )
+                return base64.b64encode(derived_key).decode() == stored_hash
+
+            else:
+                # 旧格式兼容性警告 (SHA-256 + 静态盐)
+                logger.warning("检测到旧格式密码哈希，建议用户重新设置密码")
+                # 尝试旧格式验证 (仅用于迁移期)
+                legacy_salt = "exo_cluster_salt_v1"
+                salted = f"{legacy_salt}:{password}"
+                new_hash = hashlib.sha256(salted.encode('utf-8')).hexdigest()
+                return new_hash == hashed
+
+        except Exception as e:
+            logger.error(f"密码验证异常: {e}")
+            return False
 
     def check_login_rate_limit(self, client_ip: str) -> Tuple[bool, str]:
         """
@@ -841,38 +1174,211 @@ class AuthManager:
             self.record_login_attempt(client_ip, False)
             return None, error_msg
 
-        # 验证凭据（使用密码哈希）
-        default_password_hash = self.hash_password("admin123")
+        # 安全改进: 从环境变量读取默认管理员密码
+        # 优先级: 环境变量 > 配置文件中的管理员用户密码哈希
+        admin_default_password = os.getenv("EXO_ADMIN_DEFAULT_PASSWORD", "")
 
-        if username == "admin" and self.hash_password(password) == default_password_hash:
-            # 登录成功
-            self.record_login_attempt(client_ip, True)
+        if username == "admin":
+            # 方式1: 使用环境变量设置的密码 (推荐生产环境)
+            if admin_default_password and self.verify_password(password, self.hash_password(admin_default_password)):
+                return self._complete_admin_login(client_ip)
 
+            # 方式2: 查找已存在的管理员用户并验证其密码哈希
             admin_user = None
             for user in self._users.values():
                 if user.role == "admin":
                     admin_user = user
                     break
 
-            if not admin_user:
-                admin_user = self._create_user(
-                    union_id="admin",
-                    nickname="管理员",
-                    avatar="",
-                    role="admin"
-                )
+            if admin_user and admin_user.website_password_hash:
+                if self.verify_password(password, admin_user.website_password_hash):
+                    admin_user.last_login_at = time.time()
+                    self._save_data()
+                    token = self._create_session(admin_user.id)
+                    logger.info(f"管理员登录成功 (IP: {client_ip})")
+                    self.record_login_attempt(client_ip, True)
+                    return token, ""
 
-            admin_user.last_login_at = time.time()
-            self._save_data()
+            # 方式3: 首次初始化向导 (仅当无任何管理员用户时)
+            if not admin_user and not admin_default_password:
+                # 首次启动且未设置环境变量密码，使用一次性初始密码
+                init_password = os.getenv("EXO_INIT_PASSWORD", "admin_init_2024!")
+                if password == init_password:
+                    logger.warning("⚠️ 使用首次初始化密码登录，请立即设置安全密码!")
+                    created_user = self._create_user(
+                        union_id="admin",
+                        nickname="管理员",
+                        avatar="",
+                        role="admin"
+                    )
+                    # 自动将初始化密码哈希存储
+                    created_user.website_password_hash = self.hash_password(init_password)
+                    self._save_data()
 
-            token = self._create_session(admin_user.id)
-            logger.info(f"管理员登录成功 (IP: {client_ip})")
-            return token, ""
+                    token = self._create_session(created_user.id)
+                    logger.info(f"管理员首次初始化登录成功 (IP: {client_ip})")
+                    self.record_login_attempt(client_ip, True)
+                    return token, ""
 
         # 登录失败
         self.record_login_attempt(client_ip, False)
         logger.warning(f"管理员登录失败 (IP: {client_ip}, 用户名: {username})")
         return None, "用户名或密码错误"
+
+    def _complete_admin_login(self, client_ip: str) -> Tuple[Optional[str], str]:
+        """完成管理员登录流程"""
+        self.record_login_attempt(client_ip, True)
+
+        admin_user = None
+        for user in self._users.values():
+            if user.role == "admin":
+                admin_user = user
+                break
+
+        if not admin_user:
+            admin_user = self._create_user(
+                union_id="admin",
+                nickname="管理员",
+                avatar="",
+                role="admin"
+            )
+
+        admin_user.last_login_at = time.time()
+        self._save_data()
+
+        token = self._create_session(admin_user.id)
+        logger.info(f"管理员登录成功 (IP: {client_ip})")
+        return token, ""
+
+    # ==================== 邮箱注册登录 ====================
+
+    @staticmethod
+    def validate_email_format(email: str) -> bool:
+        """验证邮箱格式"""
+        import re
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return bool(re.match(pattern, email))
+
+    def _find_user_by_email(self, email: str) -> Optional[User]:
+        """通过邮箱查找用户"""
+        for user in self._users.values():
+            if user.website_account == email:
+                return user
+        return None
+
+    def register_email(
+        self,
+        email: str,
+        password: str,
+        nickname: str = None
+    ) -> Tuple[Optional[User], str]:
+        """
+        邮箱注册
+
+        Args:
+            email: 邮箱地址
+            password: 密码
+            nickname: 昵称（可选）
+
+        Returns:
+            (user, error_message)
+        """
+        # 验证邮箱格式
+        if not self.validate_email_format(email):
+            return None, "邮箱格式不正确"
+
+        # 转换为小写
+        email = email.lower().strip()
+
+        # 检查是否已存在
+        existing_user = self._find_user_by_email(email)
+        if existing_user:
+            return None, "该邮箱已被注册"
+
+        # 使用 PasswordPolicy 验证密码强度 (替换旧的简单长度检查)
+        is_valid, password_errors = PasswordPolicy.validate(password)
+        if not is_valid:
+            return None, f"密码不符合安全要求: {'; '.join(password_errors)}"
+
+        # 生成昵称
+        if not nickname:
+            nickname = email.split('@')[0]
+
+        # 创建新用户
+        user = self._create_user(
+            union_id=f"email_{email}",
+            nickname=nickname,
+            avatar="",
+            role="user"
+        )
+
+        # 设置邮箱和密码
+        user.website_account = email
+        user.website_password_hash = self.hash_password(password)
+        user.password_changed_at = time.time()  # 记录密码设置时间
+        user.website_password = ""  # 不存储明文密码
+
+        self._save_data()
+
+        logger.info(f"新用户注册成功: {email}")
+        return user, ""
+
+    def login_email(
+        self,
+        email: str,
+        password: str,
+        client_ip: str = "unknown"
+    ) -> Tuple[Optional[str], Optional[User], str]:
+        """
+        邮箱登录
+
+        Args:
+            email: 邮箱地址
+            password: 密码
+            client_ip: 客户端IP
+
+        Returns:
+            (session_token, user, error_message)
+        """
+        # 检查速率限制
+        allowed, error_msg = self.check_login_rate_limit(client_ip)
+        if not allowed:
+            self.record_login_attempt(client_ip, False)
+            return None, None, error_msg
+
+        # 验证邮箱格式
+        if not self.validate_email_format(email):
+            self.record_login_attempt(client_ip, False)
+            return None, None, "邮箱格式不正确"
+
+        email = email.lower().strip()
+
+        # 查找用户
+        user = self._find_user_by_email(email)
+        if not user:
+            self.record_login_attempt(client_ip, False)
+            return None, None, "邮箱或密码错误"
+
+        # 检查用户是否被禁用
+        if getattr(user, 'is_disabled', False):
+            self.record_login_attempt(client_ip, False)
+            return None, None, "账号已被禁用，请联系管理员"
+
+        # 验证密码 (使用安全的 verify_password 方法)
+        if not self.verify_password(password, user.website_password_hash):
+            self.record_login_attempt(client_ip, False)
+            logger.warning(f"邮箱登录失败 (IP: {client_ip}, 邮箱: {email})")
+            return None, None, "邮箱或密码错误"
+
+        # 登录成功
+        self.record_login_attempt(client_ip, True)
+        user.last_login_at = time.time()
+        self._save_data()
+
+        token = self._create_session(user.id)
+        logger.info(f"用户邮箱登录成功: {email} (IP: {client_ip})")
+
+        return token, user, ""
 
     # ==================== Session 管理 ====================
 

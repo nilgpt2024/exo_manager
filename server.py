@@ -53,7 +53,7 @@ import logging
 import time
 import uuid
 import argparse
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, List, AsyncGenerator, Tuple
 from pathlib import Path
 
 # FastAPI相关导入
@@ -114,20 +114,452 @@ topo_manager: Optional[P2PTopologyManager] = None
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# 导入系统日志收集器
+from sys_logger import sys_log
+
 app = FastAPI(
     title="EXO Cluster Manager API",
     description="分布式AI模型推理集群管理系统",
     version="1.0.0"
 )
 
-# CORS中间件（允许前端跨域访问）
+# 挂载静态文件目录 (仅挂载静态资源，不拦截已有路由)
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(_static_dir), html=True), name="static")
+
+# CORS中间件（安全改进: 限制允许的源域名）
+# 从环境变量读取允许的域名列表，默认仅允许本地开发
+import os
+_allowed_origins_str = os.getenv("EXO_CORS_ORIGINS", "http://localhost:8080,http://localhost:3000,http://127.0.0.1:8080")
+ALLOWED_ORIGINS = [origin.strip() for origin in _allowed_origins_str.split(",") if origin.strip()]
+
+# 开发模式检测: 如果环境变量 EXO_DEV_MODE=true，则允许所有来源 (仅用于本地调试)
+_is_dev_mode = os.getenv("EXO_DEV_MODE", "").lower() in ("true", "1", "yes")
+
+if _is_dev_mode:
+    logger.warning("⚠️ CORS 开发模式已启用: 允许所有来源 (不建议用于生产环境)")
+    _cors_origins = ["*"]
+else:
+    logger.info(f"CORS 已启用安全模式，允许的源域名: {ALLOWED_ORIGINS}")
+    _cors_origins = ALLOWED_ORIGINS
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=True if _cors_origins != ["*"] else False,  # 当 allow_origins=["*"] 时必须为 False
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # 限制 HTTP 方法
+    allow_headers=["Authorization", "Content-Type", "Cookie", "X-Requested-With"],  # 限制请求头
 )
+
+# ==================== 安全响应头中间件 ====================
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    安全响应头中间件
+
+    添加以下 HTTP 安全头:
+    - X-Content-Type-Options: 防止 MIME 类型嗅探
+    - X-Frame-Options: 防止点击劫持
+    - X-XSS-Protection: 启用浏览器 XSS 过滤器
+    - Strict-Transport-Security (HSTS): 强制 HTTPS
+    - Content-Security-Policy: 限制资源加载来源
+    - Referrer-Policy: 控制 Referer 头信息泄露
+    - Permissions-Policy: 限制浏览器功能
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        # 基础安全头 (所有环境启用)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+        # 权限策略: 禁用不必要的浏览器功能
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), "
+            "payment=(), usb=(), magnetometer=(), gyroscope=()"
+        )
+
+        # 生产环境额外安全头
+        is_production = os.getenv("EXO_ENV", "").lower() in ("production", "prod")
+        if is_production:
+            # HSTS: 强制 HTTPS 1年 (包括子域名)
+            response.headers["Strict-Transport-Security"] = (
+                "max-age=31536000; includeSubDomains; preload"
+            )
+
+            # CSP: 限制脚本/样式来源 (根据实际需求调整)
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+                "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+                "img-src 'self' data: https:; "
+                "font-src 'self' https://cdnjs.cloudflare.com; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; "
+                "base-uri 'self'; "
+                "form-action 'self'"
+            )
+        else:
+            # 开发模式: 宽松的 CSP (便于调试)
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdnjs.cloudflare.com; "
+                "img-src 'self' data: https: http:; "
+                "connect-src 'self' ws: wss:"
+            )
+
+        return response
+
+
+# 注册安全头中间件 (必须在路由注册之前)
+app.add_middleware(SecurityHeadersMiddleware)
+logger.info("✅ 安全响应头中间件已注册")
+
+# ==================== API 速率限制中间件 ====================
+import time
+from collections import defaultdict
+from threading import Lock
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    """
+    API 全局速率限制中间件
+
+    特性:
+    - 基于 IP 地址的请求频率限制
+    - 支持不同端点的差异化限流策略
+    - 滑动窗口算法，防止突发流量
+    - 自动记录超限请求用于审计
+    - 支持白名单 IP 无限制访问
+
+    配置环境变量:
+    - EXO_RATE_LIMIT_ENABLED: 是否启用 (true/false, 默认 true)
+    - EXO_RATE_LIMIT_REQUESTS: 窗口内最大请求数 (默认 100)
+    - EXO_RATE_LIMIT_WINDOW: 时间窗口秒数 (默认 60)
+    - EXO_RATE_LIMIT_WHITELIST: 白名单 IP (逗号分隔)
+    """
+
+    def __init__(self, app):
+        super().__init__(app)
+
+        # 从环境变量读取配置
+        self.enabled = os.getenv("EXO_RATE_LIMIT_ENABLED", "true").lower() in ("true", "1", "yes")
+        self.max_requests = int(os.getenv("EXO_RATE_LIMIT_REQUESTS", "100"))
+        self.window_seconds = int(os.getenv("EXO_RATE_LIMIT_WINDOW", "60"))
+
+        # IP 白名单 (不受限制)
+        whitelist_str = os.getenv("EXO_RATE_LIMIT_WHITELIST", "")
+        self.whitelist_ips = set(ip.strip() for ip in whitelist_str.split(",") if ip.strip())
+
+        # 存储结构: {ip: [(timestamp1), (timestamp2), ...]}
+        self._requests: Dict[str, List[float]] = defaultdict(list)
+        self._lock = Lock()
+
+        # 特殊端点配置 (更严格的限制)
+        self.endpoint_limits = {
+            "/login": {"requests": 10, "window": 60},      # 登录接口: 10次/分钟
+            "/register": {"requests": 5, "window": 300},     # 注册接口: 5次/5分钟
+            "/admin/": {"requests": 30, "window": 60},       # 管理接口: 30次/分钟
+            "/v1/chat/completions": {"requests": 20, "window": 60},  # 聊天: 20次/分钟
+        }
+
+        if self.enabled:
+            logger.info(
+                f"✅ API 速率限制已启用 (全局: {self.max_requests}次/{self.window_seconds}s, "
+                f"白名单IP: {len(self.whitelist_ips)}个)"
+            )
+        else:
+            logger.warning("⚠️ API 速率限制已禁用 (不建议生产环境)")
+
+    def _cleanup_old_requests(self, ip: str, current_time: float):
+        """清理过期的请求记录"""
+        cutoff_time = current_time - self.window_seconds
+        self._requests[ip] = [
+            ts for ts in self._requests[ip] if ts > cutoff_time
+        ]
+
+    def _is_rate_limited(self, ip: str, path: str) -> Tuple[bool, Dict]:
+        """
+        检查是否触发速率限制
+
+        Returns:
+            (is_limited, info_dict) - info 包含限制详情
+        """
+        if not self.enabled:
+            return False, {}
+
+        # 白名单 IP 不受限
+        if ip in self.whitelist_ips:
+            return False, {}
+
+        current_time = time.time()
+
+        with self._lock:
+            # 清理过期记录
+            self._cleanup_old_requests(ip, current_time)
+
+            # 检查特殊端点限制
+            for endpoint_prefix, limit_config in self.endpoint_limits.items():
+                if path.startswith(endpoint_prefix):
+                    max_reqs = limit_config["requests"]
+                    window = limit_config["window"]
+
+                    # 使用独立的计数器 (基于 endpoint + ip)
+                    key = f"{ip}:{endpoint_prefix}"
+                    if key not in self._requests:
+                        self._requests[key] = []
+
+                    cutoff = current_time - window
+                    self._requests[key] = [ts for ts in self._requests[key] if ts > cutoff]
+
+                    if len(self._requests[key]) >= max_reqs:
+                        retry_after = int(window - (current_time - self._requests[key][0])) + 1
+                        return True, {
+                            "limit_type": "endpoint",
+                            "endpoint": endpoint_prefix,
+                            "max_requests": max_reqs,
+                            "window_seconds": window,
+                            "retry_after": retry_after,
+                        }
+
+                    self._requests[key].append(current_time)
+                    return False, {}
+
+            # 全局限制检查
+            if len(self._requests[ip]) >= self.max_requests:
+                retry_after = int(
+                    self.window_seconds - (current_time - self._requests[ip][0])
+                ) + 1
+                return True, {
+                    "limit_type": "global",
+                    "max_requests": self.max_requests,
+                    "window_seconds": self.window_seconds,
+                    "retry_after": retry_after,
+                }
+
+            # 记录本次请求
+            self._requests[ip].append(current_time)
+            return False, {}
+
+    async def dispatch(self, request: Request, call_next):
+        """处理请求并检查速率限制"""
+        # 获取客户端 IP
+        client_ip = request.client.host if request.client else "unknown"
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+
+        # OPTIONS 预检请求不限制
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # 静态资源不限制
+        if request.url.path.startswith("/static"):
+            return await call_next(request)
+
+        # 检查速率限制
+        is_limited, limit_info = self._is_rate_limited(client_ip, request.url.path)
+
+        if is_limited:
+            # 记录速率限制事件 (用于审计和安全分析)
+            logger.warning(
+                f"🚫 [RateLimit] IP {client_ip} 触发速率限制 "
+                f"(路径: {request.url.path}, 类型: {limit_info.get('limit_type')}, "
+                f"重试: {limit_info.get('retry_after')}s)"
+            )
+
+            # 返回 429 Too Many Requests
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Too Many Requests",
+                    "message": "API 请求频率超过限制，请稍后重试",
+                    "detail": limit_info,
+                    "retry_after": limit_info.get("retry_after", 60),
+                },
+                headers={"Retry-After": str(limit_info.get("retry_after", 60))},
+            )
+
+        # 正常处理请求
+        response = await call_next(request)
+
+        # 在响应头中添加速率限制信息 (方便客户端查看)
+        if self.enabled and client_ip not in self.whitelist_ips:
+            with self._lock:
+                remaining = max(0, self.max_requests - len(self._requests.get(client_ip, [])))
+            response.headers["X-RateLimit-Limit"] = str(self.max_requests)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+            response.headers["X-RateLimit-Reset"] = str(int(time.time()) + self.window_seconds)
+
+        return response
+
+
+# 注册速率限制中间件 (在安全头之后，路由之前)
+app.add_middleware(RateLimitMiddleware)
+
+# ==================== IP 白名单/黑名单过滤中间件 ====================
+class IPFilterMiddleware(BaseHTTPMiddleware):
+    """
+    IP 访问控制中间件
+
+    功能:
+    - 白名单模式: 仅允许白名单中的 IP 访问 (适用于管理后台)
+    - 黑名单模式: 拒绝黑名单中的 IP 访问
+    - 支持路径级别的差异化规则
+    - 自动记录被拒绝的访问尝试
+
+    配置环境变量:
+    - EXO_IP_FILTER_ENABLED: 是否启用 (true/false, 默认 false)
+    - EXO_IP_WHITELIST_MODE: 使用白名单模式 (true/false)
+    - EXO_IP_WHITELIST: 白名单 IP (逗号分隔)
+    - EXO_IP_BLACKLIST: 黑名单 IP (逗号分隔)
+    - EXO_IP_ADMIN_PATHS: 需要严格控制的路径前缀 (默认 /admin)
+    """
+
+    def __init__(self, app):
+        super().__init__(app)
+
+        # 从环境变量读取配置
+        self.enabled = os.getenv("EXO_IP_FILTER_ENABLED", "false").lower() in ("true", "1", "yes")
+        self.whitelist_mode = os.getenv("EXO_IP_WHITELIST_MODE", "false").lower() in ("true", "1", "yes")
+
+        # 解析白名单和黑名单
+        whitelist_str = os.getenv("EXO_IP_WHITELIST", "")
+        self.whitelist_ips = set(ip.strip() for ip in whitelist_str.split(",") if ip.strip())
+
+        blacklist_str = os.getenv("EXO_IP_BLACKLIST", "")
+        self.blacklist_ips = set(ip.strip() for ip in blacklist_str.split(",") if ip.strip())
+
+        # 需要严格控制的路径 (管理员接口)
+        admin_paths_str = os.getenv("EXO_IP_ADMIN_PATHS", "/admin")
+        self.admin_paths = [p.strip() for p in admin_paths_str.split(",") if p.strip()]
+
+        # 内网/私有地址范围 (自动信任)
+        self.trusted_ranges = [
+            "127.0.0.1",      # localhost
+            "::1",            # IPv6 localhost
+            "10.",            # 10.0.0.0/8
+            "172.16.",       # 172.16.0.0/12
+            "192.168.",      # 192.168.0.0/16
+        ]
+
+        if self.enabled:
+            mode_str = "白名单" if self.whitelist_mode else "黑名单"
+            logger.info(
+                f"✅ IP 过滤已启用 ({mode_str}模式, "
+                f"白名单: {len(self.whitelist_ips)}个, "
+                f"黑名单: {len(self.blacklist_ips)}个)"
+            )
+        else:
+            logger.info("ℹ️ IP 过滤未启用 (可通过 EXO_IP_FILTER_ENABLED 启用)")
+
+    def _is_trusted_ip(self, ip: str) -> bool:
+        """检查是否为受信任的内部 IP"""
+        return any(ip.startswith(prefix) for prefix in self.trusted_ranges) or ip == "unknown"
+
+    def _is_admin_path(self, path: str) -> bool:
+        """检查是否为管理员路径"""
+        return any(path.startswith(admin_path) for admin_path in self.admin_paths)
+
+    def _should_block(self, ip: str, path: str) -> Tuple[bool, str]:
+        """
+        判断是否应该阻止访问
+
+        Returns:
+            (should_block, reason)
+        """
+        if not self.enabled:
+            return False, ""
+
+        # 受信任的 IP 始终允许
+        if self._is_trusted_ip(ip):
+            return False, ""
+
+        # 管理员路径使用更严格的规则
+        is_admin = self._is_admin_path(path)
+
+        if self.whitelist_mode:
+            # 白名单模式: 不在白名单中则拒绝
+            if ip not in self.whitelist_ips:
+                reason = (
+                    "IP 不在白名单中 (管理员接口需要白名单访问)" if is_admin else
+                    "IP 不在白名单中"
+                )
+                return True, reason
+        else:
+            # 黑名单模式: 在黑名单中则拒绝
+            if ip in self.blacklist_ips:
+                return True, "IP 已被列入黑名单"
+
+            # 管理员接口额外检查白名单
+            if is_admin and self.whitelist_ips and ip not in self.whitelist_ips:
+                return True, "管理员接口仅限白名单 IP 访问"
+
+        return False, ""
+
+    async def dispatch(self, request: Request, call_next):
+        """处理请求并检查 IP 访问权限"""
+
+        # 获取客户端 IP
+        client_ip = request.client.host if request.client else "unknown"
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            client_ip = forwarded.split(",")[0].strip()
+
+        # OPTIONS 和静态资源不限制
+        if request.method == "OPTIONS" or request.url.path.startswith("/static"):
+            return await call_next(request)
+
+        # 检查是否应该阻止访问
+        should_block, block_reason = self._should_block(client_ip, request.url.path)
+
+        if should_block:
+            # 记录审计日志 (如果可用)
+            try:
+                from audit_logger import get_audit_logger
+                audit = get_audit_logger()
+                audit.log_security_event(
+                    event_type="IP access denied",
+                    ip=client_ip,
+                    details={
+                        "path": request.url.path,
+                        "method": request.method,
+                        "reason": block_reason,
+                        "user_agent": request.headers.get("user-agent", "")[:200]
+                    },
+                    severity="WARNING"
+                )
+            except Exception:
+                pass  # 审计日志不可用时静默失败
+
+            logger.warning(
+                f"🚫 [IPFilter] 拒绝访问: IP={client_ip}, "
+                f"路径={request.url.path}, 原因={block_reason}"
+            )
+
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": "Forbidden",
+                    "message": "您的 IP 地址没有权限访问此资源",
+                    "detail": block_reason if os.getenv("EXO_DEBUG", "").lower() in ("true", "1") else None
+                }
+            )
+
+        # 正常处理请求
+        response = await call_next(request)
+        return response
+
+
+# 注册 IP 过滤中间件 (在速率限制之后，路由之前)
+app.add_middleware(IPFilterMiddleware)
 
 # 注册 OpenAI 兼容路由
 app.include_router(openai_router)
@@ -138,6 +570,11 @@ app.include_router(auth_router)
 logger.info("✅ 认证路由已注册 (无前缀)")
 app.include_router(admin_router)
 logger.info("✅ 管理员路由已注册 (/admin/*)")
+
+# 注册 FRP Server 管理路由
+from frp_routes import router as frp_router
+app.include_router(frp_router)
+logger.info("✅ FRP Server 管理路由已注册 (/api/frps/*)")
 
 # ==================== 自定义模型配置管理 ====================
 CUSTOM_MODELS_FILE = Path(__file__).parent / "data" / "custom_models.json"
@@ -408,6 +845,41 @@ async def startup_event():
     else:
         logger.info(f"🔑 已加载 {stats['total_keys']} 个 API Key ({stats['active_keys']} 个活跃)")
 
+    # 初始化 FRP Server（如果启用）
+    frp_enabled = os.getenv("EXO_FRP_ENABLE", "false").lower() in ("true", "1", "yes")
+    if frp_enabled:
+        from frp_server_manager import get_frp_server_manager
+        frp_mgr = get_frp_server_manager()
+
+        # 应用命令行配置（token 优先复用已有配置，避免重启后 token 变化导致节点断连）
+        bind_port = int(os.getenv("EXO_FRP_BIND_PORT", "7000"))
+        token = os.getenv("EXO_FRP_TOKEN")
+        dashboard_port = os.getenv("EXO_FRP_DASHBOARD_PORT")
+
+        config_updates = {"bind_port": bind_port}
+
+        # Token 持久化逻辑：已有配置则复用，否则用新生成的
+        if not frp_mgr.config.token and token:
+            config_updates["token"] = token
+            logger.info(f"🔑 FRP Token 已设置 (新)")
+        elif frp_mgr.config.token:
+            logger.info(f"🔑 FRP Token 已复用 (持久化): {frp_mgr.config.token[:8]}...")
+        elif token:
+            config_updates["token"] = token
+
+        if dashboard_port:
+            port_val = int(dashboard_port)
+            config_updates["dashboard_port"] = port_val if port_val > 0 else None
+
+        frp_mgr.update_config(**config_updates)
+
+        logger.info(f"🌐 正在启动 FRP Server (端口: {bind_port})...")
+        success, msg = await frp_mgr.start_server()
+        if success:
+            logger.info(f"✅ FRP Server 启动成功: {msg}")
+        else:
+            logger.warning(f"⚠️ FRP Server 启动失败: {msg} (可通过 /api/frps/start 手动启动)")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -419,6 +891,18 @@ async def shutdown_event():
     
     if manager:
         await manager.shutdown()
+
+    # 停止 FRP Server
+    frp_enabled = os.getenv("EXO_FRP_ENABLE", "false").lower() in ("true", "1", "yes")
+    if frp_enabled:
+        try:
+            from frp_server_manager import get_frp_server_manager
+            frp_mgr = get_frp_server_manager()
+            if frp_mgr.is_running():
+                await frp_mgr.stop_server()
+                logger.info("🌐 FRP Server 已停止")
+        except Exception as e:
+            logger.warning(f"⚠️ FRP Server 停止异常: {e}")
 
 
 # ==================== 节点管理 API ====================
@@ -633,19 +1117,29 @@ async def health_check_node(node_id: str, request: Request):
         logger.info(f"[Heartbeat] 节点 {node_id} 不存在（可能 Server 重启），尝试自动重新注册...")
         try:
             reg_device_info = {}
+            reg_address = "127.0.0.1"
+            reg_port = 50051
+            reg_chatgpt_port = 52415
             if raw_body:
                 try:
                     hb_data = json.loads(raw_body)
                     if "gpu_memory" in hb_data:
                         reg_device_info["memory_detail"] = hb_data["gpu_memory"]
+                    # 从心跳数据提取节点真实网络地址（用于构建 chatgpt_url）
+                    if "address" in hb_data:
+                        reg_address = hb_data["address"]
+                    if "port" in hb_data:
+                        reg_port = int(hb_data["port"])
+                    if "chatgpt_api_port" in hb_data:
+                        reg_chatgpt_port = int(hb_data["chatgpt_api_port"])
                 except Exception:
                     pass
 
             reg_success = await manager.add_node(
                 node_id=node_id,
-                address="127.0.0.1",
-                port=50051,
-                chatgpt_api_port=52415,
+                address=reg_address,
+                port=reg_port,
+                chatgpt_api_port=reg_chatgpt_port,
                 device_info=reg_device_info or {}
             )
 
@@ -689,15 +1183,34 @@ async def health_check_node(node_id: str, request: Request):
                 node_info = manager.nodes[node_id]
                 if "memory_detail" not in node_info.device_info:
                     node_info.device_info["memory_detail"] = {}
-                
+
                 node_info.device_info["memory_detail"].update({
                     "total": gpu_memory.get("total", 0),
                     "free": gpu_memory.get("free", 0),
                     "used": gpu_memory.get("used", 0)
                 })
-                
+
                 logger.debug(f"📊 [Heartbeat] 节点 {node_id} GPU显存: "
                             f"{gpu_memory.get('used', 0)}/{gpu_memory.get('total', 0)} MB")
+
+        # 更新节点网络地址（确保 chatgpt_url 始终正确）
+        if "address" in heartbeat_data or "chatgpt_api_port" in heartbeat_data:
+            node_info = manager.nodes[node_id]
+            addr_changed = False
+            if "address" in heartbeat_data and heartbeat_data["address"] != node_info.address:
+                old_addr = node_info.address
+                node_info.address = heartbeat_data["address"]
+                logger.info(f"🌐 [Heartbeat] 节点 {node_id} 地址更新: {old_addr} → {node_info.address}")
+                addr_changed = True
+            if "chatgpt_api_port" in heartbeat_data:
+                new_port = int(heartbeat_data["chatgpt_api_port"])
+                if new_port != node_info.chatgpt_api_port:
+                    old_port = node_info.chatgpt_api_port
+                    node_info.chatgpt_api_port = new_port
+                    logger.info(f"🌐 [Heartbeat] 节点 {node_id} HTTP端口更新: {old_port} → {new_port}")
+                    addr_changed = True
+            if addr_changed:
+                logger.info(f"🌐 [Heartbeat] 节点 {node_id} chatgpt_url → {node_info.chatgpt_url}")
         
         # ✅ 验证和补全 device_info（确保每次心跳后数据完整）
         if node_id in manager.nodes:
@@ -1798,7 +2311,8 @@ async def pool_load_model(request: Dict[str, Any]):
         "instance_count": 2,                (可选，要创建的实例数量，默认1)
         "model_path": "./models/qwen3-0.6b", (可选，默认由系统自动查找)
         "n_layers": 24,                     (可选，默认从模型配置自动获取)
-        "strategy": "memory_weighted",      (可选: memory_weighted, uniform, performance_weighted)
+        "strategy": "smart",              (可选: smart(默认), memory_weighted, uniform, performance_weighted)
+                                           smart=智能策略: 单节点优先+安全余量检查，能不拆就不拆
         "target_nodes": ["node1", "node2"]   (可选，指定目标节点)
     }
     
@@ -1842,7 +2356,7 @@ async def pool_load_model(request: Dict[str, Any]):
     model_id = request.get("model_id")
     instance_count = request.get("instance_count", 1)  # ✅ 默认创建1个实例
     n_layers = request.get("n_layers")
-    strategy = request.get("strategy", "memory_weighted")
+    strategy = request.get("strategy", "smart")  # 默认使用智能策略
     target_nodes = request.get("target_nodes")
     model_path = request.get("model_path", "")
     
@@ -2630,7 +3144,7 @@ def _get_available_models_for_inference() -> List[Dict]:
 async def pool_preview_allocation(
     model_id: str,
     n_layers: int = 32,
-    strategy: str = "memory_weighted"
+    strategy: str = "smart"  # 默认智能策略
 ):
     """
     预览模型分配方案（不实际加载）
@@ -2659,6 +3173,9 @@ async def pool_preview_allocation(
                 "model_id": allocation.model_id,
                 "total_layers": allocation.total_layers,
                 "strategy": allocation.strategy,
+                "allocation_type": allocation.allocation_type,
+                "decision_reason": allocation.decision_reason,
+                "safety_warnings": allocation.safety_warnings or [],
                 "allocations": allocation.allocations,
                 "estimated_memory_per_node": allocation.estimated_memory_per_node
             }
@@ -2669,6 +3186,92 @@ async def pool_preview_allocation(
             "success": False,
             "error": str(e)
         }
+
+
+# ==================== 故障恢复 API ====================
+
+@app.post("/api/fault-recovery/{node_id}", response_model=Dict)
+async def trigger_fault_recovery(node_id: str):
+    """
+    手动触发指定节点的故障恢复
+
+    当节点掉线后，模拟故障恢复流程：
+    - 识别受影响的模型
+    - 尝试迁移到存活节点
+    - 返回恢复方案报告
+
+    Path Params:
+        node_id: 掉线的节点ID
+    """
+    if not manager:
+        raise HTTPException(status_code=503, detail="服务未初始化")
+
+    try:
+        from gpu_pool_integration import SmartAllocator
+        allocator = SmartAllocator(manager)
+        report = allocator.handle_node_failure(node_id)
+
+        return {
+            "success": True,
+            "data": report,
+            "message": f"节点 {node_id} 故障恢复分析完成"
+        }
+
+    except Exception as e:
+        logger.error(f"故障恢复处理失败: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@app.get("/api/fault-recovery/history", response_model=Dict)
+async def get_fault_recovery_history(limit: int = 10):
+    """
+    获取历史故障恢复记录
+
+    Query Params:
+        limit: 返回记录数量上限（默认10条）
+    """
+    if not manager:
+        raise HTTPException(status_code=503, detail="服务未初始化")
+
+    history = getattr(manager, '_fault_recovery_history', [])
+    return {
+        "success": True,
+        "data": history[-limit:] if history else [],
+        "total": len(history)
+    }
+
+
+
+# ==================== 系统日志 API ====================
+
+@app.get("/api/logs", response_model=Dict)
+async def get_system_logs(
+    level: str = None,
+    category: str = None,
+    limit: int = 100,
+    offset: int = 0
+):
+    """
+    获取系统日志
+
+    Query Params:
+        level: 过滤级别 (info/warning/error/success)
+        category: 过滤分类 (allocation/fault-recovery/node/model/...)
+        limit: 返回条数上限（默认100）
+        offset: 分页偏移量
+    """
+    result = sys_log.get_logs(level=level, category=category, limit=limit, offset=offset)
+    return {"success": True, "data": result}
+
+
+@app.post("/api/logs/clear", response_model=Dict)
+async def clear_system_logs():
+    """清空系统日志"""
+    sys_log.clear()
+    return {"success": True, "message": "日志已清空"}
 
 
 # ==================== P2P 拓扑管理 API ====================
@@ -2889,6 +3492,35 @@ class NodeWSManager:
         self.node_connections: Dict[str, WebSocket] = {}  # node_id -> websocket
         self.pending_requests: Dict[str, asyncio.Queue] = {}  # request_id -> response queue
         self._lock = asyncio.Lock()
+
+    async def safe_send(self, node_id: str, data: Any) -> bool:
+        """
+        安全发送消息到节点（自动处理连接已关闭的情况）
+
+        Args:
+            node_id: 目标节点 ID
+            data: 要发送的数据（会被 json 序列化）
+
+        Returns:
+            bool: 是否发送成功
+        """
+        if node_id not in self.node_connections:
+            logger.warning(f"[NodeWS] safe_send 失败: 节点 {node_id} 未连接")
+            return False
+
+        ws = self.node_connections[node_id]
+        try:
+            if isinstance(data, (dict, list)):
+                msg = json.dumps(data, ensure_ascii=False)
+            else:
+                msg = str(data)
+            await ws.send_text(msg)
+            return True
+        except Exception as e:
+            logger.warning(f"[NodeWS] safe_send 失败: 节点 {node_id} 发送错误: {e}")
+            # 连接已失效，触发清理
+            await self.disconnect_node(node_id)
+            return False
     
     async def connect_node(self, node_id: str, websocket: WebSocket) -> bool:
         """Node 建立连接"""
@@ -2927,21 +3559,25 @@ class NodeWSManager:
             return True
     
     async def disconnect_node(self, node_id: str):
-        """Node 断开连接"""
-        if node_id in self.node_connections:
-            del self.node_connections[node_id]
-            logger.info(f"🔌 [NodeWS] 节点 {node_id} 已断开 (剩余: {len(self.node_connections)})")
-        
-        # ✅ 关键修复：断开时立即标记节点为离线
+        """Node 断开连接（幂等操作，支持重复调用）"""
+        # 幂等：已断开的节点直接跳过
+        if node_id not in self.node_connections:
+            logger.debug(f"[NodeWS] 节点 {node_id} 已断开，跳过重复清理")
+            return
+
+        del self.node_connections[node_id]
+        logger.info(f"🔌 [NodeWS] 节点 {node_id} 已断开 (剩余: {len(self.node_connections)})")
+
+        # 标记节点为离线
         if manager and node_id in manager.nodes:
             node_info = manager.nodes[node_id]
             old_status = node_info.status.value
             node_info.status = NodeStatus.OFFLINE
             node_info.error_message = "WebSocket连接已断开"
-            
+
             logger.warning(f"⚠️ [NodeWS] 节点 {node_id} 已标记为离线 (状态: {old_status} → offline)")
-            
-            # 通知前端节点状态变化
+
+            # 通知前端节点状态变化（非关键操作，失败不阻塞）
             try:
                 await ws_manager.broadcast({
                     "type": "node_status_changed",
@@ -3065,7 +3701,7 @@ class NodeWSManager:
                 if received_node_id != node_id:
                     logger.error(f"[NodeWS] ❌ Node ID 不匹配: 期望 {node_id}, 收到 {received_node_id}")
                     return
-                
+
                 ack_msg = {
                     "type": "register_ack",
                     "status": "success",
@@ -3075,7 +3711,39 @@ class NodeWSManager:
                 if ws:
                     await ws.send_text(json.dumps(ack_msg))
                 logger.info(f"[NodeWS] ✅ 节点 {node_id} 注册成功")
-                
+
+                # 🔑 关键修复：同步注册到集群管理器，使 /api/nodes、Cluster Status、LoadBalancer 可见
+                if manager and node_id not in manager.nodes:
+                    try:
+                        # 从 WS 连接获取客户端地址
+                        client_host = getattr(ws, 'client', None)
+                        client_addr = getattr(client_host, 'host', '127.0.0.1') if client_host else '127.0.0.1'
+
+                        await manager.add_node(
+                            node_id=node_id,
+                            address=client_addr,
+                            port=0,  # WS 连接不需要 gRPC 端口
+                            chatgpt_api_port=data.get("chatgpt_api_port", 52415),
+                            device_info=data.get("device_info", {}),
+                            skip_grpc_connect=True  # WS 通道已建立，跳过 gRPC 连接
+                        )
+                        # 标记为在线（WS 已连接）
+                        if node_id in manager.nodes:
+                            manager.nodes[node_id].status = NodeStatus.ONLINE
+                            manager.nodes[node_id].error_message = ""
+                        logger.info(f"[NodeWS] 📋 节点 {node_id} 已同步到集群管理器 (地址: {client_addr})")
+                    except Exception as e:
+                        logger.warning(f"[NodeWS] ⚠️ 同步节点到集群管理器失败: {e}")
+
+            elif msg_type == "heartbeat":
+                # Node 心跳保活 — 更新 manager.nodes 中的心跳时间戳
+                if manager and node_id in manager.nodes:
+                    manager.nodes[node_id].last_heartbeat = time.time()
+                    # 确保状态为在线
+                    if manager.nodes[node_id].status != NodeStatus.ONLINE:
+                        manager.nodes[node_id].status = NodeStatus.ONLINE
+                        manager.nodes[node_id].error_message = ""
+
             elif msg_type == "inference_chunk":
                 # 收到推理结果片段
                 request_id = data.get("request_id")
@@ -3632,17 +4300,21 @@ async def websocket_node_connection(websocket: WebSocket, node_id: str):
         # 保持连接，处理 Node 发来的消息
         while True:
             data = await websocket.receive_text()
-            
+
             # 交给 NodeWSManager 处理
             await node_ws_manager.handle_node_message(node_id, data)
-            
+
     except WebSocketDisconnect:
         logger.info(f"🔌 [NodeWS] 节点 {node_id} 断开连接")
-        node_ws_manager.disconnect_node(node_id)
-        
+        await node_ws_manager.disconnect_node(node_id)
+
     except Exception as e:
-        logger.error(f"[NodeWS] ❌ 节点 {node_id} 连接错误: {e}", exc_info=True)
-        node_ws_manager.disconnect_node(node_id)
+        err_msg = str(e)
+        logger.error(f"[NodeWS] ❌ 节点 {node_id} 连接错误: {err_msg}", exc_info=True)
+        try:
+            await node_ws_manager.disconnect_node(node_id)
+        except Exception as disconnect_err:
+            logger.warning(f"[NodeWS] ⚠️ 清理节点 {node_id} 时出错（可忽略）: {disconnect_err}")
 
 
 # ==================== Web UI 页面路由 ====================
@@ -3663,6 +4335,24 @@ async def serve_login_page():
     return HTMLResponse(content="<h1>Login page not found</h1>", status_code=404)
 
 
+@app.get("/admin/login", response_class=HTMLResponse)
+async def serve_admin_login_page():
+    """提供管理员登录页面 (/admin/login)"""
+    html_file = Path(__file__).parent / "static" / "login.html"
+    if html_file.exists():
+        return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
+    return HTMLResponse(content="<h1>Login page not found</h1>", status_code=404)
+
+
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def serve_admin_dashboard():
+    """提供管理员后台页面"""
+    html_file = Path(__file__).parent / "static" / "index.html"
+    if html_file.exists():
+        return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
+    return HTMLResponse(content="<h1>Dashboard not found</h1>", status_code=404)
+
+
 @app.get("/login", response_class=HTMLResponse)
 async def serve_user_login_page():
     """提供普通用户登录页面"""
@@ -3674,6 +4364,12 @@ async def serve_user_login_page():
     if login_file.exists():
         return HTMLResponse(content=login_file.read_text(encoding='utf-8'))
     return HTMLResponse(content="<h1>Login page not found</h1>", status_code=404)
+
+
+@app.get("/login.html", response_class=HTMLResponse)
+async def serve_user_login_page_html():
+    """提供普通用户登录页面 (.html后缀兼容)"""
+    return await serve_user_login_page()
 
 
 @app.get("/user/login", response_class=HTMLResponse)
@@ -3703,35 +4399,36 @@ async def serve_user_dashboard(request: Request):
     return HTMLResponse(content="<h1>Please login first</h1>", status_code=403)
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_dashboard(request: Request):
-    """根据用户角色提供不同的页面"""
-    from auth_manager import get_auth_manager
-
-    # 检查用户登录状态
-    session_token = request.cookies.get("session_token", "")
-    if session_token:
-        auth_mgr = get_auth_manager()
-        user = auth_mgr.validate_session(session_token)
-
-        if user:
-            # 管理员 - 返回完整管理界面
-            if user.role == "admin":
-                html_file = Path(__file__).parent / "static" / "index.html"
-                if html_file.exists():
-                    return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
-
-            # 普通用户 - 返回简化界面
-            else:
-                user_html = Path(__file__).parent / "static" / "user.html"
-                if user_html.exists():
-                    return HTMLResponse(content=user_html.read_text(encoding='utf-8'))
-
-    # 未登录 - 重定向到登录页
-    login_page = Path(__file__).parent / "static" / "login.html"
-    if login_page.exists():
-        return HTMLResponse(content=login_page.read_text(encoding='utf-8'))
-
+async def serve_landing(request: Request):
+    """默认显示项目介绍落地页"""
+    landing_html = Path(__file__).parent / "static" / "landing.html"
+    if landing_html.exists():
+        return HTMLResponse(content=landing_html.read_text(encoding='utf-8'))
     return HTMLResponse(content="<h1>Page not found</h1>", status_code=404)
+
+
+@app.get("/landing", response_class=HTMLResponse)
+async def serve_landing_page(request: Request):
+    """项目介绍落地页（备用路径）"""
+    landing_html = Path(__file__).parent / "static" / "landing.html"
+    if landing_html.exists():
+        return HTMLResponse(content=landing_html.read_text(encoding='utf-8'))
+    return HTMLResponse(content="<h1>Page not found</h1>", status_code=404)
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def serve_register(request: Request):
+    """用户注册页"""
+    register_html = Path(__file__).parent / "static" / "register.html"
+    if register_html.exists():
+        return HTMLResponse(content=register_html.read_text(encoding='utf-8'))
+    return HTMLResponse(content="<h1>Page not found</h1>", status_code=404)
+
+
+@app.get("/register.html", response_class=HTMLResponse)
+async def serve_register_html(request: Request):
+    """用户注册页 (.html后缀兼容)"""
+    return await serve_register(request)
 
 
 def get_fallback_html() -> str:

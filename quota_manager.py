@@ -287,7 +287,7 @@ class QuotaManager:
 
                 if not row:
                     self._create_default_quota(user_id)
-                    row = cursor.fetchone() or conn.execute(
+                    row = conn.execute(
                         "SELECT * FROM users_quota WHERE user_id = ?", (user_id,)
                     ).fetchone()
 

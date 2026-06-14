@@ -9,6 +9,8 @@ EXO Cluster Manager - 认证路由
   /login/qrcode/{id}     - 查询二维码状态
   /login/qrcode/{id}/scan    - 扫描二维码
   /login/qrcode/{id}/confirm - 确认登录
+  /login/email            - 邮箱密码登录
+  /register/email         - 邮箱注册
   /login/wechat/callback - 微信 OAuth2 回调
   /login/wechat/status   - 微信登录状态
   /logout                - 退出登录
@@ -35,6 +37,7 @@ location /admin/ {
 
 import logging
 import io
+import time
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Cookie, HTTPException, Request, Response
@@ -48,6 +51,9 @@ if _current_dir not in sys.path:
     sys.path.insert(0, _current_dir)
 
 from auth_manager import get_auth_manager, AuthManager
+
+# 导入审计日志模块
+from audit_logger import get_audit_logger
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +87,17 @@ class ConfirmQrcodeRequest(BaseModel):
     code: str = Field("", description="微信小程序登录code")
 
 
+class EmailRegisterRequest(BaseModel):
+    email: str = Field(..., description="邮箱地址")
+    password: str = Field(..., description="密码")
+    nickname: str = Field("", description="昵称（可选）")
+
+
+class EmailLoginRequest(BaseModel):
+    email: str = Field(..., description="邮箱地址")
+    password: str = Field(..., description="密码")
+
+
 # ==================== 辅助函数 ====================
 
 def get_session_token(request: Request) -> Optional[str]:
@@ -88,6 +105,37 @@ def get_session_token(request: Request) -> Optional[str]:
     if token:
         return token
     return None
+
+
+def set_secure_cookie(response: Response, key: str, value: str, max_age: int = 7 * 24 * 3600):
+    """
+    设置安全的 Session Cookie
+
+    安全特性:
+    - httponly=True: 防止 JavaScript 访问 (防 XSS)
+    - secure: 生产环境强制 HTTPS (开发环境允许 HTTP)
+    - samesite="lax": 防止 CSRF 攻击
+    """
+    import os
+
+    # 自动检测是否为生产环境
+    is_production = os.getenv("EXO_ENV", "").lower() in ("production", "prod")
+    is_https = os.getenv("EXO_FORCE_HTTPS", "").lower() in ("true", "1", "yes")
+
+    # 生产环境或强制 HTTPS 时启用 secure 标志
+    secure_flag = is_production or is_https
+
+    response.set_cookie(
+        key=key,
+        value=value,
+        httponly=True,
+        secure=secure_flag,
+        samesite="lax",
+        max_age=max_age,
+    )
+
+    if not secure_flag:
+        logger.warning(f"Cookie '{key}' 未启用 Secure 标志 (仅用于 HTTP 开发环境)")
 
 
 # ================================================================
@@ -180,19 +228,118 @@ async def confirm_qrcode_login(qrcode_id: str, request: ConfirmQrcodeRequest, re
     
     if not token:
         raise HTTPException(status_code=404, detail="QR code not found or not scanned")
-    
-    response.set_cookie(
-        key="session_token",
-        value=token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=7 * 24 * 3600,
-    )
+
+    set_secure_cookie(response, "session_token", token)
     result = {"success": True}
     if user:
         result["data"] = {"user": user}
     return result
+
+
+@auth_router.post("/register/email")
+async def register_email(request_data: EmailRegisterRequest):
+    """
+    邮箱注册
+
+    创建新用户账号，需要提供邮箱和密码
+    """
+    auth_mgr = get_auth_manager()
+
+    # 验证邮箱格式
+    if not AuthManager.validate_email_format(request_data.email):
+        raise HTTPException(status_code=400, detail="邮箱格式不正确")
+
+    # 注册用户
+    user, error_msg = auth_mgr.register_email(
+        email=request_data.email,
+        password=request_data.password,
+        nickname=request_data.nickname or None
+    )
+
+    if not user:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    logger.info(f"新用户注册成功: {request_data.email}")
+
+    return {
+        "success": True,
+        "message": "注册成功",
+        "data": {
+            "user_id": user.id,
+            "email": user.website_account,
+            "nickname": user.nickname
+        }
+    }
+
+
+@auth_router.post("/login/email")
+async def login_email(request_data: EmailLoginRequest, request: Request, response: Response):
+    """
+    邮箱密码登录
+
+    使用邮箱和密码进行登录验证
+    """
+    auth_mgr = get_auth_manager()
+
+    # 获取客户端IP
+    client_ip = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+
+    # 执行登录
+    token, user, error_msg = auth_mgr.login_email(
+        email=request_data.email,
+        password=request_data.password,
+        client_ip=client_ip
+    )
+
+    if not token:
+        if "锁定" in error_msg or "重试" in error_msg:
+            # 记录审计日志: 登录失败 (被锁定)
+            audit = get_audit_logger()
+            audit.log_auth_login_failure(
+                username=request_data.email,
+                ip=client_ip,
+                reason=error_msg
+            )
+            raise HTTPException(status_code=429, detail=error_msg)
+        # 记录审计日志: 登录失败 (凭据错误)
+        audit = get_audit_logger()
+        audit.log_auth_login_failure(
+            username=request_data.email,
+            ip=client_ip,
+            reason="邮箱或密码错误"
+        )
+        raise HTTPException(status_code=401, detail=error_msg)
+
+    # 设置 session cookie (使用安全配置)
+    set_secure_cookie(response, "session_token", token)
+
+    logger.info(f"用户邮箱登录成功: {request_data.email} (IP: {client_ip})")
+
+    # 记录审计日志: 登录成功
+    audit = get_audit_logger()
+    audit.log_auth_login_success(
+        user_id=user.id,
+        role=user.role,
+        ip=client_ip,
+        method="email"
+    )
+
+    return {
+        "success": True,
+        "message": "登录成功",
+        "data": {
+            "token": token,
+            "user": user.to_public_dict() if hasattr(user, 'to_public_dict') else {
+                'id': user.id,
+                'nickname': user.nickname,
+                'avatar': getattr(user, 'avatar', ''),
+                'role': user.role
+            }
+        }
+    }
 
 
 @auth_router.post("/login/wechat")
@@ -207,16 +354,9 @@ async def wechat_mini_login(request: WechatMiniLoginRequest, response: Response)
     
     if not token:
         raise HTTPException(status_code=500, detail="Login failed")
-    
-    response.set_cookie(
-        key="session_token",
-        value=token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=7 * 24 * 3600,
-    )
-    
+
+    set_secure_cookie(response, "session_token", token)
+
     return {"success": True, "data": {"user": user}}
 
 
@@ -240,16 +380,9 @@ async def wechat_mini_login_with_account(request: WechatMiniLoginRequest, respon
     
     if not token:
         raise HTTPException(status_code=500, detail="Login failed")
-    
-    response.set_cookie(
-        key="session_token",
-        value=token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=7 * 24 * 3600,
-    )
-    
+
+    set_secure_cookie(response, "session_token", token)
+
     user_data = user.to_dict() if hasattr(user, 'to_dict') else {
         'id': user.id,
         'nickname': user.nickname,
@@ -575,20 +708,36 @@ async def admin_login(request_data: AdminLoginRequest, request: Request, respons
     )
 
     if not token:
+        # 记录审计日志: 管理员登录失败
+        audit = get_audit_logger()
         if "锁定" in error_msg or "重试" in error_msg:
+            audit.log_security_event(
+                event_type="Admin login locked",
+                ip=client_ip,
+                details={"username": request_data.username, "reason": error_msg},
+                severity="ERROR"
+            )
             raise HTTPException(status_code=429, detail=error_msg)
+
+        audit.log_auth_login_failure(
+            username=request_data.username,
+            ip=client_ip,
+            reason=error_msg
+        )
         raise HTTPException(status_code=401, detail=error_msg)
 
-    response.set_cookie(
-        key="session_token",
-        value=token,
-        httponly=True,
-        secure=False,
-        samesite="lax",
-        max_age=7 * 24 * 3600,
-    )
+    set_secure_cookie(response, "session_token", token)
 
     logger.info(f"管理员登录成功: IP={client_ip}, user={request_data.username}")
+
+    # 记录审计日志: 管理员登录成功
+    audit = get_audit_logger()
+    audit.log_auth_login_success(
+        user_id=request_data.username,
+        role="admin",
+        ip=client_ip,
+        method="admin_password"
+    )
 
     return {
         "success": True,

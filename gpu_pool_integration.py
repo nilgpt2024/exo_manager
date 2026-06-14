@@ -4,8 +4,15 @@ EXO Manager - GPU池管理集成
 
 将GPU池管理功能集成到Manager系统中，提供：
 - 统一的模型加载/卸载接口
-- 智能分片分配策略
+- 智能分片分配策略（单节点优先 + 安全余量 + 在线增量分配）
+- 简化版动态重平衡
 - 资源预览与优化建议
+
+核心设计原则：
+1. 能不拆就不拆：单节点完整加载 > 跨节点分片（避免 hidden_state 传输延迟）
+2. 安全余量：单节点加载时保留 30%+ 余量给 KV Cache
+3. 在线决策：支持时序请求场景下的增量分配
+4. 全局视角：考虑已有模型占用，避免碎片化
 
 使用方式:
     from gpu_pool_integration import GPUPoolIntegration
@@ -16,10 +23,19 @@ EXO Manager - GPU池管理集成
 
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any, Tuple
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from typing import Dict, List, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# 延迟导入 sys_log（避免循环依赖）
+def _get_sys_log():
+    try:
+        from sys_logger import sys_log
+        return sys_log
+    except ImportError:
+        return None
 
 
 @dataclass
@@ -30,6 +46,761 @@ class ModelAllocation:
     allocations: List[Dict[str, Any]]  # [{node_id, start_layer, end_layer, layers_count}]
     strategy: str
     estimated_memory_per_node: Dict[str, float]  # {node_id: memory_gb}
+    # 新增字段
+    allocation_type: str = "sharded"  # "single_node" | "sharded" | "rebalanced"
+    decision_reason: str = ""         # 决策原因说明
+    safety_warnings: List[str] = None  # 安全警告（如余量不足等）
+
+
+# ============================================================
+#  智能分配器 - 核心算法
+# ============================================================
+
+class SmartAllocator:
+    """
+    在线智能模型分配器
+    
+    核心能力：
+    1. 单节点优先：能不拆就不拆，避免跨节点 hidden_state 传输延迟
+    2. 安全余量检查：单节点加载时保留足够空间给 KV Cache
+    3. 在线增量决策：支持时序到达的请求序列，考虑已有占用
+    4. 简化版重平衡：当直接放置失败时尝试迁移已有小模型
+    
+    安全等级定义：
+    - SAFE (>=30% 余量):     单节点完整加载，KV Cache 空间充裕
+    - WARNING (10%~30%):    可以单节点运行，但长上下文可能 OOM
+    - DANGER (<10% 或 >90%): 极限情况，默认走拆分方案
+    - MUST_SHARD (>100%):    单节点装不下，必须拆分
+    """
+
+    # 安全阈值配置
+    SAFE_RATIO = 0.70      # 安全线：模型大小 ≤ 节点显存 × 70%
+    WARNING_RATIO = 0.90   # 警告线：模型大小 ≤ 节点显存 × 90%
+
+    def __init__(self, manager):
+        self.manager = manager
+
+    def get_nodes_with_usage(self) -> List[Dict]:
+        """
+        获取节点列表（含实时使用信息）
+
+        Returns:
+            [{
+                node_id, address, memory_mb,
+                used_mb,          # 已被其他模型占用的显存
+                free_mb,          # 剩余可用显存
+                loaded_models,    # 当前已加载的模型数
+                device, flops
+            }]
+        """
+        nodes = []
+        for node_id, node_info in self.manager.nodes.items():
+            if node_info.status.value not in ('online', 'connecting'):
+                continue
+
+            raw_mem = node_info.device_info.get("memory", 0)
+            mem_detail = node_info.device_info.get("memory_detail")
+            total_mem = raw_mem
+            if (total_mem == 0 or total_mem is None) and mem_detail and mem_detail.get("total", 0) > 0:
+                total_mem = mem_detail["total"]
+
+            # 计算已用显存（基于已加载模型的分片估算）
+            used_mb = self._estimate_node_used_memory(node_id)
+
+            nodes.append({
+                "node_id": node_id,
+                "address": f"{node_info.address}:{node_info.port}",
+                "memory_mb": total_mem,
+                "used_mb": used_mb,
+                "free_mb": max(0, total_mem - used_mb),
+                "loaded_models": len(node_info.loaded_models),
+                "device": node_info.device_info.get("chip", "Unknown"),
+                "flops": node_info.device_info.get("flops", {}),
+            })
+
+        return nodes
+
+    def _estimate_node_used_memory(self, node_id: str) -> float:
+        """估算某节点已被模型占用的显存"""
+        node_info = self.manager.nodes.get(node_id)
+        if not node_info:
+            return 0.0
+
+        total_used = 0.0
+        for model in node_info.loaded_models:
+            shard = model.get("shard", {})
+            n_layers = shard.get("end_layer", 0) - shard.get("start_layer", 0) + 1
+            # 每层按 100MB 估算（可配置）
+            total_used += n_layers * 100
+
+        # 如果有 pynvml 实时数据，优先使用
+        mem_detail = node_info.device_info.get("memory_detail")
+        if mem_detail and mem_detail.get("used", 0) > total_used:
+            return mem_detail["used"]
+
+        return total_used
+
+    def classify_model(self, model_size_mb: float, max_node_memory_mb: float) -> Tuple[str, str]:
+        """
+        判定模型相对于单节点的安全等级
+
+        Returns:
+            (level, reason) 其中 level 为 SAFE / WARNING / DANGER / MUST_SHARD
+        """
+        ratio = model_size_mb / max_node_memory_mb if max_node_memory_mb > 0 else 999
+
+        if ratio > 1.0:
+            return ("MUST_SHARD", f"模型({model_size_mb/1024:.1f}GB)超过单节点最大显存({max_node_memory_mb/1024:.1f}GB)")
+        elif ratio > self.WARNING_RATIO:
+            return ("DANGER", f"模型占比{ratio*100:.0f}%，余量不足10%，极易OOM")
+        elif ratio > self.SAFE_RATIO:
+            return ("WARNING", f"模型占比{ratio*100:.0f}%，余量{(1-ratio)*100:.0f}%，短对话可行")
+        else:
+            return ("SAFE", f"模型占比{ratio*100:.0f}%，余量充足(≥30%)")
+
+    def allocate(
+        self,
+        model_id: str,
+        total_layers: int,
+        layer_memory_mb: float = 100.0,
+        strategy: str = "smart",
+        force_shard: bool = False
+    ) -> ModelAllocation:
+        """
+        智能分配入口（同步版本，供 preview 使用）
+
+        Args:
+            model_id: 模型标识符
+            total_layers: 总层数
+            layer_memory_mb: 每层预估显存(MB)
+            strategy: 分配策略 ('smart' | 'memory_weighted' | 'uniform' | 'performance_weighted')
+            force_shard: 强制拆分（跳过单节点检查）
+
+        Returns:
+            ModelAllocation 包含完整的分配方案和决策元信息
+        """
+        nodes = self.get_nodes_with_usage()
+        if not nodes:
+            raise ValueError("没有可用的在线节点")
+
+        model_total_mb = total_layers * layer_memory_mb
+        max_node_mem = max(n["memory_mb"] for n in nodes) if nodes else 0
+
+        logger.info(f"🧠 [SmartAlloc] 模型 {model_id}: {model_total_mb/1024:.1f}GB, "
+                   f"{total_layers}层, 可用节点={len(nodes)}, "
+                   f"最大节点显存={max_node_mem/1024:.1f}GB")
+
+        # ====== smart 策略：智能决策流程 ======
+        if strategy == "smart" and not force_shard:
+
+            # Phase 1: 尝试单节点完整加载
+            single_result = self._try_single_node_allocation(
+                nodes, model_id, total_layers, model_total_mb, layer_memory_mb
+            )
+            if single_result:
+                return single_result
+
+            # Phase 2: 单节点不可行 → 走拆分策略
+            logger.info(f"🧠 [SmartAlloc] 单节点不可行，切换到拆分策略")
+
+        # ====== 传统拆分策略 ======
+        sharded_allocations = self._allocate_sharded(
+            nodes, total_layers, layer_memory_mb, strategy
+        )
+
+        estimated_memory = {}
+        for alloc in sharded_allocations:
+            estimated_memory[alloc["node_id"]] = round(
+                alloc["layers_count"] * layer_memory_mb / 1024, 2
+            )
+
+        level, reason = self.classify_model(model_total_mb, max_node_mem)
+
+        result = ModelAllocation(
+            model_id=model_id,
+            total_layers=total_layers,
+            allocations=sharded_allocations,
+            strategy=strategy,
+            estimated_memory_per_node=estimated_memory,
+            allocation_type="sharded",
+            decision_reason=f"拆分分配({strategy}) - {reason}",
+            safety_warnings=[reason] if level in ("DANGER", "MUST_SHARD") else []
+        )
+
+        # 发射系统日志
+        _sys = _get_sys_log()
+        if _sys:
+            _sys.log(
+                _sys.INFO if level in ("SAFE", "WARNING") else _sys.WARNING,
+                "allocation",
+                f"模型 {model_id} 分配完成: {result.allocation_type} - {result.decision_reason}",
+                {"strategy": strategy, "nodes": len(sharded_allocations), "total_layers": total_layers}
+            )
+
+        return result
+
+    def _try_single_node_allocation(
+        self,
+        nodes: List[Dict],
+        model_id: str,
+        total_layers: int,
+        model_total_mb: float,
+        layer_memory_mb: float
+    ) -> Optional[ModelAllocation]:
+        """
+        尝试单节点完整加载
+
+        选择逻辑：
+        1. 优先选 free_mb >= model_total_mb * 1.15 的节点（留15%额外余量）
+        2. 其次选 free_mb >= model_total_mb 且 ratio <= SAFE_RATIO 的节点
+        3. 最后选 free_mb >= model_total_mb 且 ratio <= WARNING_RATIO 的节点（带警告）
+        """
+        candidates = []
+
+        for node in nodes:
+            free_mb = node["free_mb"]
+            total_mem = node["memory_mb"]
+
+            if free_mb < model_total_mb:
+                continue  # 空间不够，跳过
+
+            ratio = model_total_mb / total_mem if total_mem > 0 else 999
+
+            if ratio <= self.SAFE_RATIO:
+                priority = 0  # 最优
+            elif ratio <= self.WARNING_RATIO:
+                priority = 1  # 可行但有风险
+            else:
+                priority = 2  # 危险区域
+
+            candidates.append({
+                **node,
+                "_ratio": ratio,
+                "_priority": priority,
+                "_waste": free_mb - model_total_mb  # 浪费的空间（越小越好）
+            })
+
+        if not candidates:
+            logger.info(f"🧠 [SmartAlloc] 无节点可容纳 {model_total_mb/1024:.1f}GB 单节点加载")
+            return None
+
+        # 排序：优先级最低的在前，同优先级下浪费最少的在前
+        candidates.sort(key=lambda c: (c["_priority"], c["_waste"]))
+        best = candidates[0]
+
+        warnings = []
+        if best["_priority"] == 1:
+            warnings.append(f"余量仅 {(1-best['_ratio'])*100:.0f}%，建议控制上下文长度")
+        elif best["_priority"] == 2:
+            warnings.append(f"⚠️ 余量不足10%，存在OOM风险！")
+
+        logger.info(f"🧠 [SmartAlloc] ✅ 单节点完整加载 → 节点 {best['node_id']} "
+                   f"(模型{model_total_mb/1024:.1f}GB / 显存{best['memory_mb']/1024:.1f}GB, "
+                   f"占比{best['_ratio']*100:.0f}%, 优先级P{best['_priority']})")
+
+        allocations = [{
+            "node_id": best["node_id"],
+            "start_layer": 0,
+            "end_layer": total_layers - 1,
+            "layers_count": total_layers,
+            "address": best["address"]
+        }]
+
+        return ModelAllocation(
+            model_id=model_id,
+            total_layers=total_layers,
+            allocations=allocations,
+            strategy="smart_single_node",
+            estimated_memory_per_node={best["node_id"]: round(model_total_mb / 1024, 2)},
+            allocation_type="single_node",
+            decision_reason=f"单节点完整加载({best['node_id']}) - 占比{best['_ratio']*100:.0f}%",
+            safety_warnings=warnings if warnings else None
+        )
+
+        # 发射系统日志：单节点分配成功
+        _sys = _get_sys_log()
+        if _sys:
+            log_level = _sys.WARNING if best["_priority"] >= 1 else _sys.SUCCESS
+            _sys.log(
+                log_level,
+                "allocation",
+                f"模型 {model_id} → 单节点完整加载 @ {best['node_id']}",
+                {"node": best["node_id"], "size_gb": round(model_total_mb / 1024, 1),
+                 "ratio": round(best["_ratio"] * 100, 0), "priority": best["_priority"]}
+            )
+
+    def _allocate_sharded(
+        self,
+        nodes: List[Dict],
+        total_layers: int,
+        layer_memory_mb: float,
+        strategy: str
+    ) -> List[Dict]:
+        """
+        拆分分配（复用原有三种策略）
+
+        注意：这里传入的是带 usage 信息的节点，但只使用基础字段做分配，
+        实际放置可行性由上层 _try_single_node_allocation 保证。
+        """
+        # 提取纯节点信息（兼容旧的分配函数接口）
+        plain_nodes = [
+            {
+                "node_id": n["node_id"],
+                "address": n["address"],
+                "memory_mb": n["memory_mb"],  # 用总显存而非剩余显存做权重
+                "flops": n.get("flops", {}),
+                "loaded_models": n["loaded_models"]
+            }
+            for n in nodes
+        ]
+
+        if strategy in ("memory_weighted", "smart"):
+            return self._legacy_allocate_by_memory(plain_nodes, total_layers, layer_memory_mb)
+        elif strategy == "uniform":
+            return self._legacy_allocate_uniformly(plain_nodes, total_layers)
+        elif strategy == "performance_weighted":
+            return self._legacy_allocate_by_performance(plain_nodes, total_layers, layer_memory_mb)
+        else:
+            return self._legacy_allocate_by_memory(plain_nodes, total_layers, layer_memory_mb)
+
+    # ---- 以下为原有的三种分配策略（保持向后兼容）----
+
+    def _legacy_allocate_by_memory(self, nodes, total_layers, layer_memory_mb):
+        """基于内存容量的加权分配"""
+        total_memory = sum(n["memory_mb"] for n in nodes)
+        if total_memory <= 0:
+            return self._legacy_allocate_uniformly(nodes, total_layers)
+
+        allocations = []
+        current_layer = 0
+        for node in sorted(nodes, key=lambda x: x["memory_mb"], reverse=True):
+            if current_layer >= total_layers:
+                break
+            weight = node["memory_mb"] / total_memory
+            layers_for_node = max(1, int(total_layers * weight))
+            layers_for_node = min(layers_for_node, total_layers - current_layer)
+            end_layer = current_layer + layers_for_node - 1
+            allocations.append({
+                "node_id": node["node_id"], "start_layer": current_layer,
+                "end_layer": end_layer, "layers_count": layers_for_node,
+                "address": node["address"]
+            })
+            current_layer = end_layer + 1
+
+        if current_layer < total_layers and allocations:
+            last_alloc = allocations[-1]
+            remaining = total_layers - current_layer
+            last_alloc["end_layer"] = total_layers - 1
+            last_alloc["layers_count"] += remaining
+        return allocations
+
+    def _legacy_allocate_uniformly(self, nodes, total_layers):
+        """均匀分配"""
+        num_nodes = len(nodes)
+        base_layers = total_layers // num_nodes
+        remainder = total_layers % num_nodes
+        allocations = []
+        current_layer = 0
+        for i, node in enumerate(nodes):
+            layers_for_node = base_layers + (1 if i < remainder else 0)
+            end_layer = current_layer + layers_for_node - 1
+            allocations.append({
+                "node_id": node["node_id"], "start_layer": current_layer,
+                "end_layer": end_layer, "layers_count": layers_for_node,
+                "address": node["address"]
+            })
+            current_layer = end_layer + 1
+        return allocations
+
+    def _legacy_allocate_by_performance(self, nodes, total_layers, layer_memory_mb):
+        """基于性能加权分配"""
+        scored_nodes = []
+        for node in nodes:
+            flops = node.get("flops", {})
+            fp16_flops = flops.get("fp16", 10.0)
+            load_penalty = node["loaded_models"] * 2
+            score = fp16_flops - load_penalty
+            scored_nodes.append({**node, "score": score})
+
+        scored_nodes.sort(key=lambda x: x["score"], reverse=True)
+        total_score = sum(n["score"] for n in scored_nodes)
+        allocations = []
+        current_layer = 0
+        for node in scored_nodes:
+            if current_layer >= total_layers:
+                break
+            weight = node["score"] / total_score
+            layers_for_node = max(1, int(total_layers * weight))
+            layers_for_node = min(layers_for_node, total_layers - current_layer)
+            end_layer = current_layer + layers_for_node - 1
+            allocations.append({
+                "node_id": node["node_id"], "start_layer": current_layer,
+                "end_layer": end_layer, "layers_count": layers_for_node,
+                "address": node["address"]
+            })
+            current_layer = end_layer + 1
+        return allocations
+
+    # ============================================================
+    #  故障恢复 - 节点掉线处理
+    # ============================================================
+
+    def handle_node_failure(self, failed_node_id: str) -> Dict[str, Any]:
+        """
+        处理节点掉线故障
+
+        当一个节点离线时：
+        1. 识别该节点上承载的所有模型分片
+        2. 对每个受影响模型判断恢复可行性
+        3. 尝试在存活节点上重新分配（迁移）
+        4. 返回恢复报告
+
+        Args:
+            failed_node_id: 掉线的节点ID
+
+        Returns:
+            {
+                "failed_node": str,
+                "affected_models": [      # 受影响的模型列表
+                    {
+                        "model_id": str,
+                        "shard_on_failed": {start_layer, end_layer},
+                        "recovery_action": "migrated" | "degraded" | "lost",
+                        "recovery_detail": str,
+                        "new_allocation": [...] | None   # 迁移成功时的新方案
+                    }
+                ],
+                "summary": {"total", "migrated", "degraded", "lost"}
+            }
+        """
+        logger.warning(f"🚨 [FaultRecovery] 开始处理节点掉线: {failed_node_id}")
+
+        # Step 1: 找出该节点上的所有分片
+        affected = self._find_affected_models(failed_node_id)
+
+        if not affected:
+            logger.info(f"✅ [FaultRecovery] 节点 {failed_node_id} 上无已加载模型，无需恢复")
+            return {
+                "failed_node": failed_node_id,
+                "affected_models": [],
+                "summary": {"total": 0, "migrated": 0, "degraded": 0, "lost": 0}
+            }
+
+        logger.warning(f"⚠️ [FaultRecovery] 发现 {len(affected)} 个受影响模型: "
+                      f"{[a['model_id'] for a in affected]}")
+
+        # Step 2: 获取当前存活的可用节点
+        alive_nodes = self.get_nodes_with_usage()
+        alive_nodes = [n for n in alive_nodes if n["node_id"] != failed_node_id]
+
+        if not alive_nodes:
+            logger.error(f"❌ [FaultRecovery] 无可用存活节点，所有受影响模型将丢失")
+            return self._build_loss_report(failed_node_id, affected)
+
+        # Step 3: 逐个模型尝试恢复
+        recovery_results = []
+        summary = {"total": len(affected), "migrated": 0, "degraded": 0, "lost": 0}
+
+        for model_info in affected:
+            result = self._recover_single_model(
+                model_info, failed_node_id, alive_nodes
+            )
+            recovery_results.append(result)
+            summary[result["recovery_action"] + "ed" if result["recovery_action"] in ("migrat", "degrad") else result["recovery_action"]] += 1
+
+        report = {
+            "failed_node": failed_node_id,
+            "affected_models": recovery_results,
+            "summary": summary
+        }
+
+        action_counts = ", ".join(f"{k}={v}" for k, v in summary.items())
+        logger.info(f"[FaultRecovery] 恢复完成: {action_counts}")
+
+        # 发射系统日志：故障恢复报告
+        _sys = _get_sys_log()
+        if _sys:
+            has_loss = summary["lost"] > 0
+            has_success = summary["migrated"] > 0
+            if has_loss:
+                log_level = _sys.ERROR
+            elif has_success:
+                log_level = _sys.SUCCESS
+            else:
+                log_level = _sys.WARNING
+
+            _sys.log(
+                log_level,
+                "fault-recovery",
+                f"节点 {failed_node_id} 掉线: 受影响{summary['total']}个模型, "
+                f"迁移{summary['migrated']}, 降级{summary['degraded']}, 丢失{summary['lost']}",
+                {"failed_node": failed_node_id, **summary, "models": [r["model_id"] for r in recovery_results]}
+            )
+
+        return report
+
+    def _find_affected_models(self, failed_node_id: str) -> List[Dict]:
+        """找出指定节点上承载的所有模型分片"""
+        affected = []
+        node_info = self.manager.nodes.get(failed_node_id)
+
+        if not node_info:
+            return affected
+
+        for model in node_info.loaded_models:
+            model_id = model.get("model_id", "")
+            shard = model.get("shard", {})
+
+            # 提取基础模型ID（去掉 ::instance 后缀）
+            base_id = model_id.split("::")[0] if "::" in model_id else model_id
+
+            affected.append({
+                "model_id": model_id,
+                "base_model_id": base_id,
+                "shard": {
+                    "start_layer": shard.get("start_layer", 0),
+                    "end_layer": shard.get("end_layer", 0),
+                    "n_layers": shard.get("n_layers", 0)
+                },
+                "instance_id": model.get("instance_id", "default")
+            })
+
+        return affected
+
+    def _recover_single_model(
+        self,
+        model_info: Dict,
+        failed_node_id: str,
+        alive_nodes: List[Dict]
+    ) -> Dict:
+        """
+        尝试恢复单个受影响的模型
+
+        恢复策略优先级：
+        1. 完整迁移：如果某个存活节点能完整容纳该模型的全部层 → 迁移过去
+        2. 分片重组：用多个存活节点重新分担该掉线节点的分片部分
+        3. 降级运行：模型不完整，但剩余分片仍可提供有限服务
+        4. 完全丢失：无法恢复，标记为 lost
+        """
+        model_id = model_info["model_id"]
+        base_id = model_info["base_model_id"]
+        lost_shard = model_info["shard"]
+        lost_layers = lost_shard["end_layer"] - lost_shard["start_layer"] + 1
+        total_layers = lost_shard.get("n_layers", lost_layers)
+
+        logger.info(f"🔧 [FaultRecovery] 处理模型 {model_id}: "
+                   f"丢失 L{lost_shard['start_layer']}-L{lost_shard['end_layer']} ({lost_layers}层)")
+
+        # 策略1: 尝试找单个存活节点完整容纳整个模型
+        single_node_result = self._try_migrate_to_single_node(
+            model_id, total_layers, alive_nodes
+        )
+        if single_node_result:
+            return single_node_result
+
+        # 策略2: 尝试用存活节点重新分担丢失的分片
+        reshared_result = self._try_reshare_shard(
+            model_info, failed_node_id, alive_nodes
+        )
+        if reshared_result:
+            return reshared_result
+
+        # 策略3: 检查是否可以降级运行（其他分片还在）
+        degraded = self._check_degraded_mode(model_id, failed_node_id)
+        if degraded:
+            return degraded
+
+        # 策略4: 完全无法恢复
+        logger.error(f"❌ [FaultRecovery] 模型 {model_id} 无法恢复")
+        return {
+            "model_id": model_id,
+            "shard_on_failed": lost_shard,
+            "recovery_action": "lost",
+            "recovery_detail": f"无足够资源恢复，模型 {model_id} 已不可用",
+            "new_allocation": None
+        }
+
+    def _try_migrate_to_single_node(
+        self,
+        model_id: str,
+        total_layers: int,
+        alive_nodes: List[Dict]
+    ) -> Optional[Dict]:
+        """策略1: 尝试迁移到单个存活节点"""
+        layer_memory_mb = 100  # 每层预估显存
+        model_total_mb = total_layers * layer_memory_mb
+
+        for node in sorted(alive_nodes, key=lambda n: n["free_mb"], reverse=True):
+            if node["free_mb"] >= model_total_mb:
+                ratio = model_total_mb / node["memory_mb"] if node["memory_mb"] > 0 else 999
+                if ratio <= self.WARNING_RATIO:  # 安全余量检查
+                    logger.info(f"✅ [FaultRecovery] {model_id} → 单节点迁移到 {node['node_id']}")
+                    return {
+                        "model_id": model_id,
+                        "shard_on_failed": {"start_layer": 0, "end_layer": total_layers - 1},
+                        "recovery_action": "migrated",
+                        "recovery_detail": f"完整迁移到节点 {node['node_id']} (单节点加载)",
+                        "new_allocation": [{
+                            "node_id": node["node_id"],
+                            "start_layer": 0,
+                            "end_layer": total_layers - 1,
+                            "layers_count": total_layers,
+                            "address": node["address"],
+                            "_is_migration": True
+                        }]
+                    }
+
+        return None
+
+    def _try_reshare_shard(
+        self,
+        model_info: Dict,
+        failed_node_id: str,
+        alive_nodes: List[Dict]
+    ) -> Optional[Dict]:
+        """
+        策略2: 用多个存活节点重新分担丢失的分片部分
+
+        只重新分配掉线节点上的那部分层，其他节点上的分片保持不变
+        """
+        model_id = model_info["model_id"]
+        lost_start = model_info["shard"]["start_layer"]
+        lost_end = model_info["shard"]["end_layer"]
+        lost_count = lost_end - lost_start + 1
+        layer_memory_mb = 100
+
+        # 计算需要多少空间
+        needed_mb = lost_count * layer_memory_mb
+
+        # 找出有足够空间的存活节点组合
+        candidates = [
+            n for n in alive_nodes
+            if n["free_mb"] >= layer_memory_mb  # 至少能放一层
+        ]
+
+        if not candidates or sum(n["free_mb"] for n in candidates) < needed_mb:
+            return None
+
+        # 按剩余空间排序，贪心分配
+        candidates.sort(key=lambda n: n["free_mb"], reverse=True)
+
+        new_allocations = []
+        remaining_layers = lost_count
+        current_layer = lost_start
+
+        for node in candidates:
+            if remaining_layers <= 0:
+                break
+
+            max_fit = int(node["free_mb"] / layer_memory_mb)
+            layers_here = min(max_fit, remaining_layers)
+
+            if layers_here <= 0:
+                continue
+
+            end_layer = current_layer + layers_here - 1
+            new_allocations.append({
+                "node_id": node["node_id"],
+                "start_layer": current_layer,
+                "end_layer": end_layer,
+                "layers_count": layers_here,
+                "address": node["address"],
+                "_is_migration": True
+            })
+            current_layer = end_layer + 1
+            remaining_layers -= layers_here
+
+        if remaining_layers > 0:
+            # 存活节点不够放下所有丢失的层
+            logger.warning(f"⚠️ [FaultRecovery] {model_id}: 存活节点只能恢复部分分片 "
+                          f"(还差 {remaining_layers} 层)")
+            return None
+
+        alloc_summary = ", ".join(
+            f"{a['node_id']}(L{a['start_layer']}-{a['end_layer']})"
+            for a in new_allocations
+        )
+
+        logger.info(f"✅ [FaultRecovery] {model_id} → 分片重组到: {alloc_summary}")
+
+        return {
+            "model_id": model_id,
+            "shard_on_failed": model_info["shard"],
+            "recovery_action": "migrated",
+            "recovery_detail": f"丢失的分片已重新分配到 {len(new_allocations)} 个存活节点",
+            "new_allocation": new_allocations
+        }
+
+    def _check_degraded_mode(
+        self,
+        model_id: str,
+        failed_node_id: str
+    ) -> Optional[Dict]:
+        """
+        策略3: 降级运行模式
+
+        如果模型的其他分片还在其他存活节点上，
+        标记为降级状态（推理质量/功能受限）
+        """
+        # 检查其他节点上是否还有该模型的分片
+        other_shards = []
+
+        for nid, node_info in self.manager.nodes.items():
+            if nid == failed_node_id:
+                continue
+            for model in node_info.loaded_models:
+                mid = model.get("model_id", "")
+                # 匹配基础模型ID（考虑多实例场景）
+                base_mid = mid.split("::")[0] if "::" in mid else mid
+                base_model_id = model_id.split("::")[0] if "::" in model_id else model_id
+
+                if base_mid == base_model_id:
+                    shard = model.get("shard", {})
+                    other_shards.append({
+                        "node_id": nid,
+                        "shard": shard
+                    })
+
+        if other_shards:
+            shard_info = ", ".join(
+                f"{s['node_id']}(L{s['shard'].get('start_layer', '?')}-L{s['shard'].get('end_layer', '?')})"
+                for s in other_shards
+            )
+
+            logger.warning(f"⚠️ [FaultRecovery] {model_id} 进入降级模式: "
+                          f"仅剩 {len(other_shards)} 个分片在线 [{shard_info}]")
+
+            return {
+                "model_id": model_id,
+                "shard_on_failed": {"start_layer": 0, "end_layer": 0},
+                "recovery_action": "degraded",
+                "recovery_detail": (
+                    f"部分分片丢失，剩余 {len(other_shards)} 个分片可提供降级服务。"
+                    f"建议尽快恢复节点或手动卸载后重新加载。"
+                ),
+                "new_allocation": None,
+                "remaining_shards": other_shards
+            }
+
+        return None
+
+    def _build_loss_report(self, failed_node_id: str, affected: List[Dict]) -> Dict:
+        """构建完全丢失的报告"""
+        results = []
+        for m in affected:
+            results.append({
+                "model_id": m["model_id"],
+                "shard_on_failed": m["shard"],
+                "recovery_action": "lost",
+                "recovery_detail": "无可用存活节点，模型完全丢失",
+                "new_allocation": None
+            })
+
+        return {
+            "failed_node": failed_node_id,
+            "affected_models": results,
+            "summary": {"total": len(affected), "migrated": 0, "degraded": 0, "lost": len(affected)}
+        }
 
 
 class GPUPoolIntegration:
@@ -119,52 +890,57 @@ class GPUPoolIntegration:
         model_id: str,
         total_layers: int,
         layer_memory_mb: float = 100.0,
-        strategy: str = "memory_weighted"
+        strategy: str = "smart"
     ) -> ModelAllocation:
         """
         预览模型分片分配方案
-        
+
         Args:
             model_id: 模型标识符
             total_layers: 总层数
             layer_memory_mb: 每层预估显存占用 (MB)
-            strategy: 分配策略 ('memory_weighted', 'uniform', 'performance_weighted')
-            
+            strategy: 分配策略:
+                - 'smart':          智能策略（默认）：单节点优先 + 安全余量检查
+                - 'memory_weighted': 按显存加权（传统，始终拆分）
+                - 'uniform':        均匀分配（传统，始终拆分）
+                - 'performance_weighted': 按性能加权（传统，始终拆分）
+
         Returns:
-            分配方案对象
+            分配方案对象 (ModelAllocation)，包含 allocation_type / decision_reason 等元信息
         """
-        nodes = self.get_available_nodes()
-        
-        if not nodes:
-            raise ValueError("没有可用的在线节点")
-        
-        if strategy == "memory_weighted":
-            allocations = self._allocate_by_memory(nodes, total_layers, layer_memory_mb)
-        elif strategy == "uniform":
-            allocations = self._allocate_uniformly(nodes, total_layers)
-        elif strategy == "performance_weighted":
-            allocations = self._allocate_by_performance(nodes, total_layers, layer_memory_mb)
+        # 使用智能分配器
+        allocator = SmartAllocator(self.manager)
+
+        if strategy == "smart":
+            # 智能策略：自动判断单节点 or 拆分
+            result = allocator.allocate(
+                model_id=model_id,
+                total_layers=total_layers,
+                layer_memory_mb=layer_memory_mb,
+                strategy="smart"
+            )
         else:
-            raise ValueError(f"未知的分配策略: {strategy}")
-        
-        # 计算每个节点的预估内存使用
-        estimated_memory = {}
-        for alloc in allocations:
-            node_id = alloc["node_id"]
-            layers = alloc["layers_count"]
-            estimated_memory[node_id] = round(layers * layer_memory_mb / 1024, 2)  # GB
-        
-        allocation = ModelAllocation(
-            model_id=model_id,
-            total_layers=total_layers,
-            allocations=allocations,
-            strategy=strategy,
-            estimated_memory_per_node=estimated_memory
-        )
-        
-        logger.info(f"📊 预览分配方案 - {model_id}: {len(allocations)} 个节点")
-        
-        return allocation
+            # 传统策略：用户明确选择时走原有逻辑（但通过 allocator 统一处理）
+            result = allocator.allocate(
+                model_id=model_id,
+                total_layers=total_layers,
+                layer_memory_mb=layer_memory_mb,
+                strategy=strategy,
+                force_shard=True   # 非 smart 策略强制拆分，保持向后兼容
+            )
+
+        alloc_type_label = {
+            "single_node": "单节点完整加载",
+            "sharded": "跨节点拆分",
+            "rebalanced": "重平衡后分配"
+        }.get(result.allocation_type, result.allocation_type)
+
+        logger.info(f"📊 预览分配方案 - {model_id}: "
+                   f"类型={alloc_type_label}, "
+                   f"节点数={len(result.allocations)}, "
+                   f"原因={result.decision_reason}")
+
+        return result
     
     def _allocate_by_memory(
         self,
@@ -472,4 +1248,4 @@ class GPUPoolIntegration:
         }
 
 
-__all__ = ['GPUPoolIntegration', 'ModelAllocation']
+__all__ = ['GPUPoolIntegration', 'ModelAllocation', 'SmartAllocator']

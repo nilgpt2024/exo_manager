@@ -840,6 +840,452 @@
             .main-content { width: 100%; }
             .msg-bubble { max-width: 85%; }
         }
+
+        /* ==================== 节点连接页面样式 ==================== */
+        .page-connect {
+            padding: 2rem;
+            overflow-y: auto;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .connect-header h2 {
+            font-size: 1.35rem;
+            margin-bottom: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .connect-header p {
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .connect-status-bar {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            background: #f1f5f9;
+            font-size: 0.85rem;
+        }
+
+        .status-indicator {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .status-indicator.online { background: #10b981; box-shadow: 0 0 6px #10b98166; }
+        .status-indicator.offline { background: #94a3b8; }
+        .status-indicator.error { background: #ef4444; }
+
+        /* ---- 节点选择器（多节点支持） ---- */
+        .node-selector-area {
+            margin-top: 1.2rem;
+            padding: 1rem;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+            border: 1px solid #e2e8f0;
+        }
+
+        .node-selector-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        .node-selector-header h3 {
+            margin: 0;
+            font-size: 0.95rem;
+            color: #334155;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .add-node-btn {
+            padding: 0.35rem 0.85rem;
+            font-size: 0.82rem;
+            border-radius: 8px;
+            border: 1px dashed var(--user-primary);
+            background: transparent;
+            color: var(--user-primary);
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        .add-node-btn:hover {
+            background: var(--user-primary);
+            color: white;
+            border-style: solid;
+        }
+
+        .node-tabs {
+            display: flex;
+            gap: 0.65rem;
+            flex-wrap: wrap;
+        }
+
+        .node-tab {
+            position: relative;
+            padding: 0.6rem 1rem;
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            min-width: 160px;
+            user-select: none;
+        }
+        .node-tab:hover {
+            border-color: #94a3b8;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .node-tab.active {
+            border-color: var(--user-primary);
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            box-shadow: 0 2px 10px rgba(59,130,246,0.15);
+        }
+
+        .node-tab-name {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 0.15rem;
+        }
+        .node-tab-id {
+            font-size: 0.76rem;
+            color: #64748b;
+            font-family: 'Cascadia Code', monospace;
+            margin-bottom: 0.25rem;
+        }
+
+        /* 端口编辑行 */
+        .node-tab-port-row {
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+        .node-tab-port-label {
+            font-size: 0.7rem;
+            color: #94a3b8;
+        }
+        .node-tab-port-input {
+            width: 70px;
+            padding: 2px 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: 5px;
+            font-size: 0.78rem;
+            font-family: 'Cascadia Code', monospace;
+            text-align: center;
+            color: #334155;
+            background: white;
+            transition: border-color 0.2s;
+        }
+        .node-tab-port-input:focus {
+            outline: none;
+            border-color: var(--user-primary);
+            box-shadow: 0 0 0 2px rgba(59,130,246,0.15);
+        }
+        .node-tab.active .node-tab-port-input {
+            border-color: var(--user-primary);
+            background: #f0f7ff;
+        }
+
+        .node-tab-remove {
+            position: absolute;
+            top: -5px;
+            right: -5px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: none;
+            background: #ef4444;
+            color: white;
+            font-size: 0.7rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .node-tab:hover .node-tab-remove { opacity: 1; }
+        .node-tab-remove:hover { background: #dc2626; transform: scale(1.1); }
+
+        .node-selector-hint {
+            text-align: center;
+            color: #9ca3af;
+            font-size: 0.83rem;
+            margin-top: 0.5rem;
+        }
+
+        .connect-section {
+            margin-top: 1.5rem;
+        }
+
+        .section-title-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .section-title-row h3 {
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            color: #334155;
+        }
+
+        .copy-btn, .toggle-btn {
+            padding: 0.35rem 0.85rem;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            background: #fff;
+            cursor: pointer;
+            font-size: 0.82rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        .copy-btn:hover, .toggle-btn:hover {
+            background: #f0fdfa;
+            border-color: var(--user-primary);
+            color: var(--user-primary);
+        }
+
+        .command-box {
+            background: #0f172a;
+            border-radius: 10px;
+            padding: 1.2rem;
+            overflow-x: auto;
+        }
+
+        .command-text {
+            color: #a5f3fc;
+            font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.88rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .command-hint {
+            font-size: 0.82rem;
+            color: #94a3b8;
+            margin-top: 0.6rem;
+        }
+
+        .param-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .param-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 0.85rem;
+        }
+
+        .param-card label {
+            display: block;
+            font-size: 0.78rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            margin-bottom: 0.3rem;
+        }
+
+        .param-card span {
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.92rem;
+            color: #1e293b;
+            word-break: break-all;
+        }
+
+        .guide-section {
+            background: linear-gradient(135deg, #f0fdfa 0%, #ecfdf5 100%);
+            border: 1px solid #d1fae5;
+            border-radius: 12px;
+            padding: 1.25rem;
+        }
+
+        .guide-section h3 {
+            font-size: 1rem;
+            margin-bottom: 0.4rem;
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            color: #065f46;
+        }
+
+        .guide-desc {
+            font-size: 0.82rem;
+            color: #6b7280;
+            margin-bottom: 1rem;
+        }
+
+        /* OS 切换 Tab */
+        .os-tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+
+        .os-tab {
+            flex: 1;
+            padding: 0.55rem 1rem;
+            border: 2px solid #d1d5db;
+            border-radius: 8px;
+            background: white;
+            color: #6b7280;
+            font-size: 0.88rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+        }
+
+        .os-tab:hover { border-color: var(--user-primary); color: #374151; }
+        .os-tab.active {
+            border-color: var(--user-primary);
+            background: #f0fdfa;
+            color: var(--user-primary);
+            font-weight: 600;
+        }
+
+        /* 脚本预览 + 下载 */
+        .script-preview { position: relative; }
+
+        .script-box {
+            background: #0f172a;
+            border-radius: 10px;
+            padding: 1rem;
+            max-height: 320px;
+            overflow-y: auto;
+            margin-bottom: 0.75rem;
+        }
+
+        .script-box code {
+            color: #94a3b8;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 0.78rem;
+            line-height: 1.65;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .download-btn {
+            width: 100%;
+            padding: 0.7rem;
+            background: var(--user-primary);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+
+        .download-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .download-btn:active { transform: translateY(0); }
+
+        /* ==================== 集群状态 ==================== */
+        .cluster-overview {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .cluster-overview h3 {
+            font-size: 0.95rem;
+            margin-bottom: 0.85rem;
+            display: flex; align-items: center; gap: 0.4rem;
+            color: #374151;
+        }
+
+        /* 统计卡片 */
+        .cluster-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-bottom: 1rem; }
+        .cluster-stat-card {
+            background: #f9fafb; border: 1px solid #e5e7eb;
+            border-radius: 10px; padding: 0.7rem 0.5rem;
+            text-align: center; transition: all 0.2s;
+        }
+        .cluster-stat-card i { font-size: 1.2rem; color: #9ca3af; margin-bottom: 0.3rem; display: block; }
+        .cluster-stat-card .stat-value { font-size: 1.3rem; font-weight: 700; color: #111827; line-height: 1.2; }
+        .cluster-stat-card .stat-label { font-size: 0.72rem; color: #6b7280; margin-top: 0.15rem; }
+        .cluster-stat-card.online i { color: #10b981; }
+        .cluster-stat-card.online { background: #ecfdf5; border-color: #d1fae5; }
+        .cluster-stat-card.online .stat-value { color: #059669; }
+        .cluster-stat-card.vram i { color: #8b5cf6; }
+        .cluster-stat-card.vram { background: #f5f3ff; border-color: #ede9fe; }
+        .cluster-stat-card.vram .stat-value { color: #7c3aed; }
+        .cluster-stat-card.health i { color: #f59e0b; }
+        .cluster-stat-card.health { background: #fffbeb; border-color: #fef3c7; }
+        .cluster-stat-card.health .stat-value { color: #d97706; }
+
+        /* 我的节点 */
+        .my-node-section {
+            background: linear-gradient(135deg, #f0fdfa, #ecfdf5);
+            border: 1px solid #d1fae5; border-radius: 10px;
+            padding: 0.85rem 1rem; margin-bottom: 0.85rem;
+        }
+        .my-node-header { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.55rem; }
+        .my-node-header strong { font-size: 0.88rem; color: #065f46; }
+        .my-node-badge {
+            margin-left: auto; padding: 0.12rem 0.55rem; border-radius: 20px;
+            font-size: 0.7rem; font-weight: 600; background: #fecaca; color: #991b1b;
+        }
+        .my-node-badge.online { background: #bbf7d0; color: #166534; }
+        .my-node-body { font-size: 0.82rem; color: #4b5563; }
+        .my-node-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem 1rem; margin-top: 0.35rem; }
+        .my-node-info-row { display: flex; justify-content: space-between; }
+        .my-node-info-row span:first-child { color: #6b7280; }
+        .my-node-info-row span:last-child { font-weight: 600; color: #111827; }
+
+        /* 节点列表 */
+        .nodes-list-section { background: #f9fafb; border-radius: 10px; overflow: hidden; }
+        .nodes-list-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0.55rem 0.85rem; font-size: 0.82rem; color: #374151;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .nodes-list-header span { color: #9ca3af; font-size: 0.75rem; }
+        .node-item {
+            display: flex; align-items: center; gap: 0.65rem;
+            padding: 0.55rem 0.85rem; border-bottom: 1px solid #f3f4f6;
+            font-size: 0.8rem; transition: background 0.15s;
+        }
+        .node-item:last-child { border-bottom: none; }
+        .node-item:hover { background: #f3f4f6; }
+        .node-item.is-mine { background: #f0fdfa; border-left: 3px solid var(--user-primary); }
+        .node-status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .node-status-dot.online { background: #10b981; box-shadow: 0 0 4px rgba(16,185,129,0.4); }
+        .node-status-dot.offline { background: #d1d5db; }
+        .node-id-text { font-family: 'Cascadia Code', monospace; font-size: 0.76rem; color: #374151; min-width: 110px; }
+        .node-chip-text { color: #6b7280; font-size: 0.74rem; flex: 1; }
+        .node-vram-text { color: #7c3aed; font-weight: 600; font-size: 0.76rem; text-align: right; min-width: 60px; }
+        .node-mine-tag {
+            background: var(--user-primary); color: white;
+            padding: 0.08rem 0.35rem; border-radius: 4px;
+            font-size: 0.64rem; font-weight: 600;
+        }
+        .empty-nodes { padding: 1.5rem; text-align: center; color: #9ca3af; font-size: 0.82rem; }
     </style>
 </head>
 <body>
@@ -888,6 +1334,9 @@
         </button>
         <button class="nav-item" onclick="switchPage('stats')">
             <i class="fas fa-chart-line"></i> 使用统计
+        </button>
+        <button class="nav-item" onclick="switchPage('connect')">
+            <i class="fas fa-plug"></i> 节点连接
         </button>
     </nav>
 
@@ -1070,6 +1519,161 @@
         </div>
     </div>
 
+    <!-- ==================== 节点连接 (FRP) 页面 ==================== -->
+    <div id="pageConnect" class="page-connect page-hidden">
+        <div class="connect-header">
+            <h2>
+                <i class="fas fa-plug" style="color:var(--user-primary);"></i>
+                节点连接
+            </h2>
+            <p>获取你的专属 exo 节点启动命令，连接到推理集群</p>
+
+            <!-- FRP Server 状态栏 -->
+            <div class="connect-status-bar" id="connectStatusBar">
+                <div class="status-indicator offline" id="frpStatusIndicator"></div>
+                <span id="frpStatusText">检查中...</span>
+            </div>
+
+            <!-- 节点选择器（多节点支持） -->
+            <div class="node-selector-area">
+                <div class="node-selector-header">
+                    <h3><i class="fas fa-desktop"></i> 我的设备</h3>
+                    <button class="add-node-btn" onclick="addNode()" title="添加新设备节点">
+                        <i class="fas fa-plus"></i> 添加设备
+                    </button>
+                </div>
+                <div class="node-tabs" id="nodeTabs">
+                    <!-- 动态生成节点 Tab -->
+                </div>
+                <p class="node-selector-hint" id="nodeSelectorHint">每台设备一个节点，默认端口 50051。同机多节点请修改端口。</p>
+            </div>
+
+            <!-- 集群状态概览 -->
+            <div class="cluster-overview" id="clusterOverview">
+                <h3><i class="fas fa-server"></i> 集群状态</h3>
+                <div class="cluster-stats-grid">
+                    <div class="cluster-stat-card">
+                        <i class="fas fa-microchip"></i>
+                        <div class="stat-value" id="statTotalNodes">--</div>
+                        <div class="stat-label">总节点数</div>
+                    </div>
+                    <div class="cluster-stat-card online">
+                        <i class="fas fa-circle-check"></i>
+                        <div class="stat-value" id="statOnlineNodes">--</div>
+                        <div class="stat-label">在线节点</div>
+                    </div>
+                    <div class="cluster-stat-card vram">
+                        <i class="fas fa-memory"></i>
+                        <div class="stat-value" id="statTotalVram">-- GB</div>
+                        <div class="stat-label">总显存</div>
+                    </div>
+                    <div class="cluster-stat-card health">
+                        <i class="fas fa-heart-pulse"></i>
+                        <div class="stat-value" id="statHealth">--%</div>
+                        <div class="stat-label">健康度</div>
+                    </div>
+                </div>
+
+                <!-- 我的节点 -->
+                <div class="my-node-section" id="myNodeSection">
+                    <div class="my-node-header">
+                        <i class="fas fa-user-gear" style="color:var(--user-primary);"></i>
+                        <strong>我的节点</strong>
+                        <span class="my-node-badge" id="myNodeBadge">未连接</span>
+                    </div>
+                    <div class="my-node-body" id="myNodeBody">
+                        <p style="color:#9ca3af;">启动你的节点后，这里将显示实时状态</p>
+                    </div>
+                </div>
+
+                <!-- 节点列表 -->
+                <div class="nodes-list-section">
+                    <div class="nodes-list-header">
+                        <strong>全部节点</strong>
+                        <span id="nodeListCount">0 个节点</span>
+                    </div>
+                    <div class="nodes-list" id="nodesList">
+                        <div class="empty-nodes"><p>暂无节点数据</p></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 启动命令（核心） -->
+        <div class="connect-section">
+            <div class="section-title-row">
+                <h3><i class="fas fa-terminal"></i> 启动命令</h3>
+                <button class="copy-btn" onclick="copyCommand()" title="复制命令">
+                    <i class="fas fa-copy"></i> 复制
+                </button>
+            </div>
+            <div class="command-box" id="commandBox">
+                <code id="launchCommand" class="command-text">加载中...</code>
+            </div>
+            <p class="command-hint">复制命令后在终端执行即可连接到集群</p>
+        </div>
+
+        <!-- 连接参数详情 -->
+        <div class="connect-section">
+            <div class="section-title-row">
+                <h3><i class="fas fa-sliders-h"></i> 连接参数</h3>
+                <button class="toggle-btn" onclick="toggleSensitive()" id="sensitiveToggle">
+                    <i class="fas fa-eye-slash"></i> 显示敏感信息
+                </button>
+            </div>
+            <div class="param-grid" id="paramGrid">
+                <div class="param-card">
+                    <label>服务器地址</label>
+                    <span id="paramServerAddr">--</span>
+                </div>
+                <div class="param-card">
+                    <label>服务端口</label>
+                    <span id="paramBindPort">--</span>
+                </div>
+                <div class="param-card sensitive">
+                    <label>FRP Token</label>
+                    <span id="paramFrpToken" data-value="">••••••••</span>
+                </div>
+                <div class="param-card sensitive">
+                    <label>P2P SecretKey</label>
+                    <span id="paramSecretKey" data-value="">••••••••</span>
+                </div>
+                <div class="param-card">
+                    <label>远程端口</label>
+                    <span id="paramRemotePort">--</span>
+                </div>
+                <div class="param-card">
+                    <label>Node ID</label>
+                    <span id="paramNodeId">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 一键启动脚本 -->
+        <div class="connect-section guide-section">
+            <h3><i class="fas fa-rocket"></i> 一键启动</h3>
+            <p class="guide-desc">下载脚本后直接运行，自动完成环境检测、依赖安装和节点连接</p>
+
+            <!-- OS 切换 -->
+            <div class="os-tabs">
+                <button class="os-tab active" onclick="switchOS('win')" id="tabWin">
+                    <i class="fab fa-windows"></i> Windows
+                </button>
+                <button class="os-tab" onclick="switchOS('linux')" id="tabLinux">
+                    <i class="fab fa-linux"></i> Linux
+                </button>
+            </div>
+
+            <!-- 脚本预览 -->
+            <div class="script-preview">
+                <pre class="script-box" id="scriptBox"><code id="scriptContent">请先确保 FRP Server 运行中...</code></pre>
+                <button class="download-btn" onclick="downloadScript()" id="downloadBtn">
+                    <i class="fas fa-download"></i> 下载脚本
+                </button>
+            </div>
+        </div>
+    </div>
+
 </main>
 
 <!-- Toast 容器 -->
@@ -1080,6 +1684,7 @@ let currentUser = null;
 let availableModels = [];
 let selectedModel = '';
 let isStreaming = false;
+const chatHistory = [];  // 对话上下文记录
 
 // ==================== 初始化 ====================
 async function init() {
@@ -1121,9 +1726,11 @@ function switchPage(page) {
     document.getElementById('pageChat').classList.toggle('page-hidden', page !== 'chat');
     document.getElementById('pageApikey').classList.toggle('page-hidden', page !== 'apikey');
     document.getElementById('pageStats').classList.toggle('page-hidden', page !== 'stats');
+    document.getElementById('pageConnect').classList.toggle('page-hidden', page !== 'connect');
 
     if (page === 'apikey') loadApiKeys();
     if (page === 'stats') loadStats(30);
+    if (page === 'connect') loadConnectionInfo();
 }
 
 // ==================== 额度 ====================
@@ -1156,16 +1763,26 @@ async function loadModels() {
         const res = await fetch('/v1/models');
         const data = await res.json();
         if (data.data?.length) {
-            availableModels = data.data;
+            // 去重: 只保留基础模型名（去掉 ::worker-x 后缀）
+            const seen = new Set();
+            const baseModels = data.data.filter(m => {
+                const baseId = (m.id || m.model_id).split('::')[0];
+                if (seen.has(baseId)) return false;
+                seen.add(baseId);
+                return true;
+            });
+
+            availableModels = baseModels;
             const sel = document.getElementById('selectModel');
-            data.data.forEach(m => {
+            baseModels.forEach(m => {
                 const opt = document.createElement('option');
-                opt.value = m.id || m.model_id;
-                opt.textContent = m.id || m.model_id;
+                const baseId = (m.id || m.model_id).split('::')[0];
+                opt.value = baseId;
+                opt.textContent = baseId;
                 sel.appendChild(opt);
             });
-            if (availableModels.length > 0) {
-                selectedModel = availableModels[0].id || availableModels[0].model_id;
+            if (baseModels.length > 0) {
+                selectedModel = (baseModels[0].id || baseModels[0].model_id).split('::')[0];
                 sel.value = selectedModel;
             }
         }
@@ -1198,6 +1815,11 @@ function addMessage(content, role, streaming = false) {
     const container = document.getElementById('chatMessages');
     const welcome = document.getElementById('welcomeMsg');
     if (welcome) welcome.style.display = 'none';
+
+    // 记录到对话上下文（流式结束时更新内容）
+    if (!streaming && role !== 'system') {
+        chatHistory.push({ role, content });
+    }
 
     const id = 'msg_' + Date.now();
     const div = document.createElement('div');
@@ -1246,7 +1868,7 @@ async function sendMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: selectedModel,
-                messages: [{ role: 'user', content: message }],
+                messages: chatHistory,
                 stream: true,
             }),
         });
@@ -1284,8 +1906,11 @@ async function sendMessage() {
         }
 
         updateMessage(assistantId, fullContent);
+        // 流式结束，记录 assistant 回复到上下文
+        chatHistory.push({ role: 'assistant', content: fullContent });
         document.getElementById('tokenCost').textContent = totalTokens;
-        loadQuota();
+        // 延迟刷新额度，等待后端异步扣减完成
+        setTimeout(loadQuota, 500);
 
     } catch (e) {
         updateMessage(assistantId, `<span style="color:#ef4444;">❌ ${e.message}</span>`);
@@ -1487,6 +2112,487 @@ function showToast(msg, type = 'success') {
     t.innerHTML = `<i class="fas fa-${type === 'success' ? 'check-circle' : 'exclamation-circle'}"></i>${msg}`;
     c.appendChild(t);
     setTimeout(() => t.remove(), 3000);
+}
+
+// ==================== 节点连接 (FRP) ====================
+let connectData = null;
+let showSensitive = false;
+
+// ---- 多节点管理 ----
+let myNodes = [];           // 用户的所有节点 [{node_id, local_port, label}]
+let selectedNodeIndex = 0;  // 当前选中的节点索引
+const BASE_PORT = 50051;    // 起始端口
+
+function getMyNodesKey() {
+    return currentUser ? 'exo_my_nodes_' + currentUser.id : 'exo_my_nodes';
+}
+
+function loadMyNodes() {
+    try {
+        var saved = localStorage.getItem(getMyNodesKey());
+        if (saved) myNodes = JSON.parse(saved);
+        else initDefaultNodes();
+    } catch (e) {
+        initDefaultNodes();
+    }
+}
+
+function initDefaultNodes() {
+    // 默认 1 个节点，后续可添加更多
+    myNodes = [];
+    saveMyNodes();
+}
+
+function saveMyNodes() {
+    localStorage.setItem(getMyNodesKey(), JSON.stringify(myNodes));
+}
+
+function addNode() {
+    var idx = myNodes.length;
+    var baseId = connectData ? connectData.node_id : 'node';
+    // 不同设备上端口默认都是 50051（每台设备独立），只有同机多节点才需改端口
+    var newId = idx === 0 ? baseId : baseId + '-dev' + (idx);
+    myNodes.push({
+        node_id: newId,
+        local_port: 50051,   // 默认统一端口，不同设备互不冲突
+        label: '设备 ' + (idx + 1)
+    });
+    saveMyNodes();
+    renderNodeTabs();
+    selectNode(idx);
+    showToast('已添加节点: ' + newId + ' (端口 50051)');
+}
+
+function removeNode(index) {
+    if (myNodes.length <= 1) { showToast('至少保留一个节点'); return; }
+    var removed = myNodes.splice(index, 1)[0];
+    saveMyNodes();
+    if (selectedNodeIndex >= myNodes.length) selectedNodeIndex = myNodes.length - 1;
+    renderNodeTabs();
+    selectNode(selectedNodeIndex);
+    showToast('已移除节点: ' + removed.node_id);
+}
+
+function selectNode(index) {
+    selectedNodeIndex = index;
+    renderNodeTabs();
+    updateCommandForSelectedNode();
+}
+
+function getSelectedNodeData() {
+    if (!myNodes || !myNodes[selectedNodeIndex]) return null;
+    var node = myNodes[selectedNodeIndex];
+    // 基于 API 返回的 connectData + 当前节点的 node_id 和 port 合并
+    var d = Object.assign({}, connectData, {
+        node_id: node.node_id,
+        local_port: node.local_port
+    });
+    return d;
+}
+
+function renderNodeTabs() {
+    var container = document.getElementById('nodeTabs');
+    if (!container) return;
+
+    if (myNodes.length === 0) {
+        container.innerHTML = '<span style="color:#9ca3af;font-size:0.85rem;">暂无节点，点击上方按钮添加</span>';
+        return;
+    }
+
+    var html = '';
+    for (var i = 0; i < myNodes.length; i++) {
+        var n = myNodes[i];
+        var isActive = i === selectedNodeIndex;
+        html +=
+            '<div class="node-tab' + (isActive ? ' active' : '') + '" onclick="selectNode(' + i + ')">' +
+                '<div class="node-tab-name">' +
+                    '<i class="fas fa-desktop"></i> ' + escapeHtml(n.label) +
+                '</div>' +
+                '<div class="node-tab-id">' + escapeHtml(n.node_id) + '</div>' +
+                '<div class="node-tab-port-row">' +
+                    '<span class="node-tab-port-label">端口:</span>' +
+                    '<input type="number" class="node-tab-port-input" value="' + n.local_port + '"' +
+                    ' min="1024" max="65535"' +
+                    ' onclick="event.stopPropagation()" onchange="changeNodePort(' + i + ', this.value)"' +
+                    ' title="同一台设备运行多个节点时修改为不同端口（如 50052）">' +
+                '</div>' +
+                (myNodes.length > 1 ?
+                    '<button class="node-tab-remove" onclick="event.stopPropagation();removeNode(' + i + ')" title="移除此节点">' +
+                        '<i class="fas fa-times"></i></button>'
+                    : '') +
+            '</div>';
+    }
+    container.innerHTML = html;
+
+    var hint = document.getElementById('nodeSelectorHint');
+    if (hint) hint.style.display = 'none';
+}
+
+function changeNodePort(index, value) {
+    var port = parseInt(value);
+    if (isNaN(port) || port < 1024 || port > 65535) {
+        showToast('端口范围: 1024-65535');
+        return;
+    }
+    myNodes[index].local_port = port;
+    saveMyNodes();
+    // 如果是当前选中节点，立即更新命令
+    if (index === selectedNodeIndex) {
+        updateCommandForSelectedNode();
+    }
+}
+
+function updateCommandForSelectedNode() {
+    var d = getSelectedNodeData();
+    if (!d || !connectData) return;
+
+    // 重新生成启动命令（使用选中节点的 node_id 和 local_port）
+    d.launch_command = buildLaunchCommand(d);
+
+    document.getElementById('launchCommand').textContent = d.launch_command || '--';
+
+    // 更新参数显示
+    document.getElementById('paramServerAddr').textContent = d.server_addr || '--';
+    document.getElementById('paramBindPort').textContent = d.bind_port || '--';
+    const tokenEl = document.getElementById('paramFrpToken');
+    tokenEl.dataset.value = d.frp_token || '';
+    tokenEl.textContent = showSensitive ? (d.frp_token || '--') : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+    const skEl = document.getElementById('paramSecretKey');
+    skEl.dataset.value = d.secret_key || '';
+    skEl.textContent = showSensitive ? (d.secret_key || '--') : '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+    document.getElementById('paramRemotePort').textContent = d.remote_port || '--';
+    document.getElementById('paramNodeId').textContent = d.node_id || '--';
+
+    refreshScript();
+}
+
+function buildLaunchCommand(d) {
+    var nodeId = d.node_id || 'node';
+    var token = d.frp_token || '';
+    var addr = d.server_addr || '<FRPS_SERVER_IP>';
+    var lport = d.local_port || 50051;
+    var bport = d.bind_port || '7000';
+    var mgr = 'http://' + addr + ':8080';
+    return (
+        'python -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId +
+        ' --node-port ' + lport +
+        ' --frp-server-addr ' + addr +
+        ' --frp-server-port ' + bport +
+        " --frp-token '" + token + "'" +
+        ' --manager ' + mgr
+    );
+}
+
+function escapeHtml(s) {
+    var div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+async function loadConnectionInfo() {
+    try {
+        const res = await fetch('/api/frps/user-connection');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        connectData = await res.json();
+
+        // 初始化/恢复用户的节点列表
+        loadMyNodes();
+
+        // 如果用户还没有自定义节点列表，用默认值初始化
+        if (myNodes.length === 0 && connectData && connectData.node_id) {
+            myNodes = [{
+                node_id: connectData.node_id,
+                local_port: 50051,
+                label: '我的设备'
+            }];
+            saveMyNodes();
+        }
+
+        // 渲染节点选择器
+        renderNodeTabs();
+
+        // 渲染连接信息（基于当前选中节点）
+        updateCommandForSelectedNode();
+    } catch (e) {
+        document.getElementById('frpStatusIndicator').className = 'status-indicator error';
+        document.getElementById('frpStatusText').textContent = '获取连接信息失败: ' + e.message;
+        document.getElementById('launchCommand').textContent = '无法加载连接信息，请确认 FRP Server 已启动';
+    }
+
+    // 加载集群状态
+    loadClusterStatus();
+}
+
+// ==================== 集群状态 ====================
+
+let clusterTimer = null;
+
+async function loadClusterStatus() {
+    if (clusterTimer) clearInterval(clusterTimer);
+
+    async function fetchCluster() {
+        try {
+            const res = await fetch('/api/frps/cluster-status');
+            if (!res.ok) return;
+            const d = await res.json();
+            if (!d.success || !d.cluster) return;
+            renderClusterStatus(d);
+        } catch (e) { /* silent */ }
+    }
+
+    await fetchCluster();
+    clusterTimer = setInterval(fetchCluster, 60000);
+}
+
+function renderClusterStatus(d) {
+    var c = d.cluster;
+
+    // 统计卡片
+    document.getElementById('statTotalNodes').textContent = c.total_nodes;
+    document.getElementById('statOnlineNodes').textContent = c.online_nodes;
+    document.getElementById('statTotalVram').textContent = (c.total_memory_gb || 0).toFixed(1) + ' GB';
+    document.getElementById('statHealth').textContent = (c.health_percent || 0) + '%';
+
+    // 我的节点
+    var myNode = d.my_node;
+    var badge = document.getElementById('myNodeBadge');
+    var body = document.getElementById('myNodeBody');
+
+    if (myNode && myNode.node_id) {
+        var isOnline = myNode.status === 'online';
+        badge.textContent = isOnline ? '在线' : '离线';
+        badge.className = 'my-node-badge' + (isOnline ? ' online' : '');
+        var di = myNode.device_info || {};
+        var md = di.memory_detail || {};
+        var models = (myNode.loaded_models || []).map(function(m) { return m.model_id || m; }).join(', ') || '无';
+
+        body.innerHTML =
+            '<div class="my-node-info-grid">' +
+                '<div class="my-node-info-row"><span>节点 ID</span><span>' + myNode.node_id + '</span></div>' +
+                '<div class="my-node-info-row"><span>状态</span><span style="color:' + (isOnline ? '#059669' : '#dc2626') + '">' + (isOnline ? '在线运行中' : '离线') + '</span></div>' +
+                '<div class="my-node-info-row"><span>设备</span><span>' + (di.chip || 'Unknown') + '</span></div>' +
+                '<div class="my-node-info-row"><span>显存</span><span>' + ((di.memory || 0) / 1024).toFixed(1) + ' GB</span></div>' +
+                (md.total > 0 ?
+                    '<div class="my-node-info-row"><span>已用显存</span><span>' + md.used + '/' + md.total + ' MB</span></div>'
+                    : '') +
+                '<div class="my-node-info-row"><span>已加载模型</span><span>' + models + '</span></div>' +
+            '</div>';
+    } else {
+        badge.textContent = '未连接';
+        badge.className = 'my-node-badge';
+        body.innerHTML = '<p style="color:#9ca3af;">启动你的节点后，这里将显示实时状态</p>';
+    }
+
+    // 节点列表
+    var nodes = d.nodes || [];
+    var listEl = document.getElementById('nodesList');
+    document.getElementById('nodeListCount').textContent = nodes.length + ' 个节点';
+
+    if (nodes.length === 0) {
+        listEl.innerHTML = '<div class="empty-nodes"><p>暂无节点数据</p></div>';
+        return;
+    }
+
+    var html = '';
+    for (var i = 0; i < nodes.length; i++) {
+        var n = nodes[i];
+        var isOn = n.status === 'online';
+        html +=
+            '<div class="node-item' + (n.is_mine ? ' is-mine' : '') + '">' +
+                '<div class="node-status-dot ' + (isOn ? 'online' : 'offline') + '"></div>' +
+                '<span class="node-id-text">' + n.node_id + '</span>' +
+                '<span class="node-chip-text">' + n.chip + '</span>' +
+                '<span class="node-vram-text">' + n.memory_gb + ' GB</span>' +
+                (n.is_mine ? '<span class="node-mine-tag">我的</span>' : '') +
+            '</div>';
+    }
+    listEl.innerHTML = html;
+}
+
+function renderConnectionInfo(data) {
+    // 状态栏
+    const running = data.frps_running;
+    const indicator = document.getElementById('frpStatusIndicator');
+    const statusText = document.getElementById('frpStatusText');
+    indicator.className = 'status-indicator ' + (running ? 'online' : 'offline');
+    statusText.textContent = running ? `FRP Server 运行中 (v${data.frps_version})` : 'FRP Server 未运行';
+}
+
+function copyCommand() {
+    var d = getSelectedNodeData();
+    if (!d || !d.launch_command) return;
+    navigator.clipboard.writeText(d.launch_command).then(() => {
+        showToast('命令已复制到剪贴板');
+    });
+}
+
+// ==================== 一键启动脚本 ====================
+
+let currentOS = 'win';
+
+function switchOS(os) {
+    currentOS = os;
+    document.getElementById('tabWin').classList.toggle('active', os === 'win');
+    document.getElementById('tabLinux').classList.toggle('active', os === 'linux');
+    refreshScript();
+}
+
+function generateWinScript(d) {
+    var nodeId = d.node_id || 'node';
+    var token = d.frp_token || '';
+    var addr = d.server_addr || '<FRPS_SERVER_IP>';
+    var lport = d.local_port || 50051;
+    return [
+        '@echo off',
+        'chcp 65001 >nul',
+        'title Exo Node - ' + nodeId,
+        'echo ========================================',
+        'echo   Exo Distributed Inference Framework',
+        'echo   One-Click Node Launcher',
+        'echo   Node: ' + nodeId,
+        'echo ========================================',
+        '',
+        'cd /d "%~dp0"',
+        '',
+        ':: ---- Detect Python (优先使用虚拟环境) ----',
+        'set VENV_PYTHON=%~dp0.venv\\Scripts\\python.exe',
+        'set EXO_PYTHON=',
+        'if exist "%VENV_PYTHON%" (',
+        '    set EXO_PYTHON=%VENV_PYTHON%',
+        ') else (',
+        '    where python >nul 2>&1',
+        '    if !errorlevel! equ 0 for /f "tokens=*" %%a in ("where python") do if not defined EXO_PYTHON set EXO_PYTHON=%%a',
+        ')',
+        'if not defined EXO_PYTHON (',
+        '    echo [ERROR] Python not found.',
+        '    pause & exit /b 1',
+        ')',
+        '',
+        'echo [OK] Python: %EXO_PYTHON%',
+        '',
+        ':: ---- Create venv if needed ----',
+        'if not exist "%~dp0.venv" (',
+        '    echo [INFO] Creating virtual environment...',
+        '    "%EXO_PYTHON%" -m venv "%~dp0.venv"',
+        '    set EXO_PYTHON=%~dp0.venv\\Scripts\\python.exe',
+        ')',
+        '',
+        ':: ---- Install exo ----',
+        '"%EXO_PYTHON%" -c "import exo" >nul 2>&1',
+        'if %errorlevel% neq 0 (',
+        '    echo [INFO] Downloading exo from GitHub...',
+        '    if not exist "exo" (git clone https://github.com/nilgpt2024/exo.git) else (cd exo ^&^& git pull ^&^& cd ..)',
+        '    echo [INFO] Installing dependencies...',
+        '    "%EXO_PYTHON%" -m pip install -r exo\\requirements.txt --quiet 2>nul',
+        ')',
+        '',
+        ':: ---- Start node ----',
+        'echo Starting node... Press Ctrl+C to stop.',
+        'echo.',
+        '"%EXO_PYTHON%" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager http://' + addr + ':8080',
+        '',
+        'pause'
+    ].join('\r\n');
+}
+
+function generateLinuxScript(d) {
+    var nodeId = d.node_id || 'node';
+    var token = d.frp_token || '';
+    var addr = d.server_addr || '<FRPS_SERVER_IP>';
+    var lport = d.local_port || 50051;
+    return [
+        '#!/bin/bash',
+        'set -e',
+        '',
+        'echo "========================================"',
+        'echo "  Exo Distributed Inference Framework"',
+        'echo "  One-Click Node Launcher"',
+        'echo "  Node: ' + (d.node_id || 'unknown') + '"',
+        'echo "========================================"',
+        '',
+        'cd "$(dirname "$0")"',
+        '',
+        '# ---- 检测 Python (优先使用虚拟环境) ----',
+        'VENV_DIR="$(pwd)/.venv"',
+        'PYTHON_EXE=""',
+        'if [ -f "$VENV_DIR/bin/python" ]; then',
+        '    PYTHON_EXE="$VENV_DIR/bin/python"',
+        'elif command -v python3 &>/dev/null; then',
+        '    PYTHON_EXE=$(which python3)',
+        'elif command -v python &>/dev/null; then',
+        '    PYTHON_EXE=$(which python)',
+        'else',
+        '    echo "[ERROR] Python not found"',
+        '    exit 1',
+        'fi',
+        '',
+        'echo "[OK] Python: $PYTHON_EXE"',
+        '',
+        '# ---- 创建虚拟环境（如果不存在）----',
+        'if [ ! -d "$VENV_DIR" ]; then',
+        '    echo "[INFO] Creating virtual environment..."',
+        '    "$PYTHON_EXE" -m venv "$VENV_DIR"',
+        '    PYTHON_EXE="$VENV_DIR/bin/python"',
+        'fi',
+        '',
+        '# ---- 检测 / 安装 exo ----',
+        'if ! $PYTHON_EXE -c "import exo" 2>/dev/null; then',
+        '    echo "[INFO] Downloading exo from GitHub..."',
+        '    if [ ! -d "exo" ]; then',
+        '        git clone https://github.com/nilgpt2024/exo.git',
+        '    else',
+        '        (cd exo && git pull)',
+        '    fi',
+        '    echo "[INFO] Installing dependencies..."',
+        '    $PYTHON_EXE -m pip install -r exo/requirements.txt --quiet 2>/dev/null || true',
+        'fi',
+        '',
+        '# ---- 启动节点 ----',
+        'echo "Starting node..."',
+        'echo "Press Ctrl+C to stop."',
+        'echo ""',
+        '"$PYTHON_EXE" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager http://' + addr + ':8080',
+    ].join('\n');
+}
+
+function refreshScript() {
+    var d = getSelectedNodeData();
+    if (!d) {
+        document.getElementById('scriptContent').textContent = '请先选择一个节点';
+        return;
+    }
+    var script = currentOS === 'win' ? generateWinScript(d) : generateLinuxScript(d);
+    document.getElementById('scriptContent').textContent = script;
+}
+
+function downloadScript() {
+    var d = getSelectedNodeData();
+    if (!d) { showToast('请先选择节点'); return; }
+    var script = currentOS === 'win' ? generateWinScript(d) : generateLinuxScript(d);
+    var filename = currentOS === 'win' ? 'exo_node_' + (d.node_id || 'node') + '.bat' : 'exo_node_' + (d.node_id || 'node') + '.sh';
+    var blob = new Blob([script], { type: 'text/plain;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('已下载: ' + filename);
+}
+
+function toggleSensitive() {
+    showSensitive = !showSensitive;
+    const btn = document.getElementById('sensitiveToggle');
+    btn.innerHTML = showSensitive
+        ? '<i class="fas fa-eye"></i> 隐藏敏感信息'
+        : '<i class="fas fa-eye-slash"></i> 显示敏感信息';
+    if (connectData) renderConnectionInfo(connectData);
+}
+
+function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
 }
 
 init();

@@ -3,266 +3,569 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EXO AI - 用户登录</title>
+    <title>EXO - 用户登录</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
     <style>
         :root {
-            --accent: #07c160;
-            --accent-light: #d4edda;
-            --text-primary: #1a1a2e;
-            --text-secondary: #6b7280;
-            --bg-gradient: linear-gradient(135deg, #0ea5e9 0%, #06b6d4 50%, #10b981 100%);
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.75);
+            --accent-cyan: #00f5d4;
+            --accent-blue: #00bbf9;
+            --accent-purple: #9b5de5;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-glow: rgba(0, 245, 212, 0.15);
+            --gradient-main: linear-gradient(135deg, #00f5d4 0%, #00bbf9 50%, #9b5de5 100%);
+            --gradient-btn: linear-gradient(135deg, #00f5d4 0%, #00bbf9 100%);
+            --error: #ef4444;
+            --error-glow: rgba(239, 68, 68, 0.15);
         }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-            background: var(--bg-gradient);
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
             padding: 1rem;
+            overflow-x: hidden;
+        }
+
+        /* ===== 背景层 ===== */
+        .grid-bg {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 245, 212, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 245, 212, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            z-index: 0;
+            animation: gridMove 20s linear infinite;
+            pointer-events: none;
+        }
+
+        @keyframes gridMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(60px, 60px); }
+        }
+
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(90px);
+            opacity: 0.35;
+            z-index: 0;
+            pointer-events: none;
+            animation: orbFloat 18s ease-in-out infinite;
+        }
+
+        .orb-1 { width: 500px; height: 500px; background: radial-gradient(circle, var(--accent-cyan), transparent); top: -180px; right: -150px; }
+        .orb-2 { width: 400px; height: 400px; background: radial-gradient(circle, var(--accent-purple), transparent); bottom: -120px; left: -120px; animation-delay: -8s; }
+        .orb-3 { width: 250px; height: 250px; background: radial-gradient(circle, var(--accent-blue), transparent); top: 40%; left: 10%; animation-delay: -4s; opacity: 0.2; }
+
+        @keyframes orbFloat {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(30px, -20px) scale(1.05); }
+            66% { transform: translate(-20px, 25px) scale(0.95); }
+        }
+
+        /* ===== 登录卡片 ===== */
+        .login-wrapper {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 440px;
+            animation: cardEnter 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes cardEnter {
+            from { opacity: 0; transform: translateY(40px) scale(0.96); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
         }
 
         .login-card {
-            background: white;
+            background: var(--bg-card);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(0, 245, 212, 0.12);
             border-radius: 24px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
-            width: 100%;
-            max-width: 400px;
             overflow: hidden;
-            animation: slideUp 0.5s ease-out;
+            box-shadow:
+                0 0 0 1px rgba(255,255,255,0.04) inset,
+                0 25px 80px rgba(0,0,0,0.5),
+                0 0 60px rgba(0, 245, 212, 0.06);
         }
 
-        @keyframes slideUp {
-            from { opacity: 0; transform: translateY(30px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .card-top {
-            background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
-            padding: 3rem 2rem 2rem;
+        /* 卡片顶部 */
+        .card-header {
+            padding: 2.8rem 2.4rem 1.8rem;
             text-align: center;
             position: relative;
             overflow: hidden;
         }
 
-        .card-top::before {
+        .card-header::before {
             content: '';
             position: absolute;
-            top: -60px;
-            right: -60px;
-            width: 160px;
-            height: 160px;
-            background: rgba(7,193,96,0.08);
-            border-radius: 50%;
+            top: 0; left: 0; right: 0;
+            height: 200px;
+            background: linear-gradient(180deg, rgba(0, 245, 212, 0.06) 0%, transparent 100%);
+            pointer-events: none;
         }
 
         .brand-icon {
-            width: 72px;
-            height: 72px;
-            background: linear-gradient(135deg, var(--accent) 0%, #059669 100%);
+            width: 72px; height: 72px;
+            background: var(--gradient-main);
             border-radius: 20px;
             display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
-            color: white;
-            margin-bottom: 1.25rem;
-            box-shadow: 0 8px 24px rgba(7,193,96,0.3);
+            align-items: center; justify-content: center;
+            font-size: 30px;
+            color: var(--bg-primary);
+            margin-bottom: 1.2rem;
+            box-shadow: 0 12px 32px rgba(0, 245, 212, 0.25);
+            position: relative;
+            animation: iconPulse 3s ease-in-out infinite;
         }
 
-        .card-top h1 {
-            font-size: 1.5rem;
-            color: var(--text-primary);
+        @keyframes iconPulse {
+            0%, 100% { box-shadow: 0 12px 32px rgba(0, 245, 212, 0.25); }
+            50% { box-shadow: 0 12px 40px rgba(0, 245, 212, 0.35), 0 0 60px rgba(0, 187, 249, 0.15); }
+        }
+
+        .card-header h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.55rem;
             font-weight: 700;
-            margin-bottom: 0.35rem;
+            letter-spacing: 2px;
+            background: var(--gradient-main);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+            position: relative;
         }
 
-        .card-top p {
+        .card-header p {
             color: var(--text-secondary);
             font-size: 0.9rem;
-        }
-
-        .card-body {
-            padding: 2rem;
-        }
-
-        .qr-section {
-            text-align: center;
-        }
-
-        .qr-wrapper {
-            display: inline-block;
-            padding: 12px;
-            background: white;
-            border-radius: 16px;
-            border: 2px dashed #d1d5db;
+            font-weight: 300;
             position: relative;
-            margin-bottom: 1rem;
-            transition: all 0.3s ease;
         }
 
-        .qr-wrapper.active {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 4px rgba(7,193,96,0.1);
-        }
-
-        .qr-wrapper.expired {
-            opacity: 0.5;
-        }
-
-        #qrcode canvas, #qrcode img {
-            border-radius: 8px !important;
-        }
-
-        .qr-status {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            margin-top: 0.75rem;
+        /* 模式切换 */
+        .mode-switcher {
             display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.4rem;
+            padding: 5px;
+            margin: 0 2rem 1.5rem;
+            background: rgba(255,255,255,0.04);
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.06);
         }
 
-        .qr-status.scanned { color: var(--accent); font-weight: 600; }
-
-        .qr-refresh-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            padding: 0.5rem 1.2rem;
-            background: var(--accent-light);
-            color: #065f46;
+        .mode-btn {
+            flex: 1;
+            padding: 0.7rem;
             border: none;
-            border-radius: 20px;
-            font-size: 0.85rem;
+            background: transparent;
+            border-radius: 11px;
+            font-family: inherit;
+            font-size: 0.88rem;
+            font-weight: 500;
+            color: var(--text-muted);
             cursor: pointer;
-            margin-top: 0.75rem;
-            transition: all 0.2s;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center; justify-content: center;
+            gap: 0.45rem;
         }
 
-        .qr-refresh-btn:hover { background: var(--accent); color: white; }
+        .mode-btn:hover { color: var(--text-secondary); }
 
-        .features {
+        .mode-btn.active {
+            background: rgba(0, 245, 212, 0.12);
+            color: var(--accent-cyan);
+            font-weight: 600;
+            box-shadow: 0 0 16px rgba(0, 245, 212, 0.08);
+        }
+
+        .mode-btn i { font-size: 0.85rem; }
+
+        /* 表单区域 */
+        .form-panel {
+            display: none;
+            padding: 0 2.4rem 2.4rem;
+            animation: panelIn 0.35s ease;
+        }
+
+        .form-panel.active { display: block; }
+
+        @keyframes panelIn {
+            from { opacity: 0; transform: translateX(15px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        .form-group { margin-bottom: 1.2rem; }
+
+        .form-group label {
+            display: block;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            letter-spacing: 0.02em;
+        }
+
+        .input-wrap {
+            position: relative;
+        }
+
+        .input-wrap i {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 0.95rem;
+            transition: color 0.25s ease;
+            pointer-events: none;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.82rem 16px 0.82rem 46px;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 13px;
+            font-size: 0.93rem;
+            color: var(--text-primary);
+            font-family: inherit;
+            outline: none;
+            transition: all 0.28s ease;
+        }
+
+        .form-input::placeholder { color: var(--text-muted); }
+
+        .form-input:focus {
+            border-color: var(--accent-cyan);
+            background: rgba(0, 245, 212, 0.04);
+            box-shadow: 0 0 0 4px rgba(0, 245, 212, 0.08), 0 0 20px rgba(0, 245, 212, 0.05);
+        }
+
+        .form-input:focus ~ i,
+        .form-input:focus + i { color: var(--accent-cyan); }
+
+        .input-wrap:focus-within i { color: var(--accent-cyan); }
+
+        .form-input.error {
+            border-color: var(--error);
+            box-shadow: 0 0 0 4px var(--error-glow);
+        }
+
+        .error-text {
+            color: var(--error);
+            font-size: 0.78rem;
+            margin-top: 0.4rem;
+            display: none;
+            padding-left: 4px;
+        }
+        .error-text.show { display: block; }
+
+        /* 提交按钮 */
+        .submit-btn {
+            width: 100%;
+            padding: 0.88rem;
+            background: var(--gradient-btn);
+            color: var(--bg-primary);
+            border: none;
+            border-radius: 13px;
+            font-family: inherit;
+            font-size: 0.98rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            cursor: pointer;
+            transition: all 0.28s ease;
+            display: flex;
+            align-items: center; justify-content: center;
+            gap: 0.5rem;
+            margin-top: 0.6rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .submit-btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%; width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s ease;
+        }
+
+        .submit-btn:hover::before { left: 100%; }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0, 245, 212, 0.3), 0 0 50px rgba(0, 187, 249, 0.12);
+        }
+
+        .submit-btn:active { transform: translateY(0); }
+        .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        .submit-btn .spinner { display: none; }
+        .submit-btn.loading .spinner { display: inline-block; }
+        .submit-btn.loading .btn-text { display: none; }
+
+        /* 底部链接 */
+        .form-footer {
+            text-align: center;
+            margin-top: 1.4rem;
+            font-size: 0.87rem;
+            color: var(--text-muted);
+        }
+
+        .form-footer a {
+            color: var(--accent-cyan);
+            text-decoration: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .form-footer a::after {
+            content: '';
+            position: absolute;
+            bottom: -2px; left: 0; width: 0; height: 1.5px;
+            background: var(--gradient-main);
+            transition: width 0.25s ease;
+        }
+
+        .form-footer a:hover::after { width: 100%; }
+
+        /* 特性标签 */
+        .features-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 0.75rem;
-            margin-top: 1.75rem;
-            padding-top: 1.5rem;
-            border-top: 1px solid #f3f4f6;
+            gap: 0.65rem;
+            margin-top: 1.6rem;
+            padding-top: 1.4rem;
+            border-top: 1px solid rgba(255,255,255,0.06);
         }
 
-        .feature-item {
+        .feature-tag {
             display: flex;
             align-items: center;
-            gap: 0.6rem;
-            padding: 0.65rem;
-            background: #f9fafb;
-            border-radius: 12px;
-            font-size: 0.82rem;
+            gap: 0.55rem;
+            padding: 0.65rem 0.75rem;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 11px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            transition: all 0.25s ease;
+        }
+
+        .feature-tag:hover {
+            background: rgba(0, 245, 212, 0.05);
+            border-color: rgba(0, 245, 212, 0.12);
             color: var(--text-secondary);
         }
 
-        .feature-item i {
-            width: 28px;
-            height: 28px;
-            background: white;
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.78rem;
-            color: var(--accent);
+        .feature-tag i {
+            width: 26px; height: 26px;
+            background: rgba(0, 245, 212, 0.1);
+            border-radius: 7px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.72rem;
+            color: var(--accent-cyan);
             flex-shrink: 0;
         }
 
-        .admin-link {
+        /* 管理员入口 */
+        .admin-entry {
             text-align: center;
-            margin-top: 1.5rem;
-            padding-top: 1rem;
-            border-top: 1px solid #f3f4f6;
+            margin-top: 1.4rem;
+            padding-top: 1.2rem;
+            border-top: 1px solid rgba(255,255,255,0.06);
         }
 
-        .admin-link a {
-            color: var(--text-secondary);
-            font-size: 0.82rem;
+        .admin-entry a {
+            color: var(--text-muted);
+            font-size: 0.8rem;
             text-decoration: none;
             transition: color 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
         }
 
-        .admin-link a:hover { color: var(--primary); }
+        .admin-entry a:hover { color: var(--accent-purple); }
 
+        /* Toast */
         .toast {
             position: fixed;
-            top: 20px;
+            top: 24px;
             left: 50%;
-            transform: translateX(-50%) translateY(-100px);
-            background: var(--text-primary);
-            color: white;
-            padding: 0.75rem 1.5rem;
-            border-radius: 12px;
-            font-size: 0.88rem;
+            transform: translateX(-50%) translateY(-120px);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            padding: 0.8rem 1.6rem;
+            border-radius: 13px;
+            font-size: 0.87rem;
             z-index: 9999;
-            transition: transform 0.3s ease;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+            max-width: 90%;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.08);
         }
 
         .toast.show { transform: translateX(-50%) translateY(0); }
+        .toast.success { border-color: rgba(0, 245, 212, 0.3); color: var(--accent-cyan); }
+        .toast.error { border-color: rgba(239, 68, 68, 0.3); color: var(--error); }
 
+        /* 响应式 */
         @media (max-width: 480px) {
-            .login-card { border-radius: 16px; }
-            .features { grid-template-columns: 1fr; }
+            .login-card { border-radius: 18px; }
+            .card-header { padding: 2.2rem 1.5rem 1.4rem; }
+            .mode-switcher { margin: 0 1.4rem 1.2rem; }
+            .form-panel { padding: 0 1.4rem 1.8rem; }
+            .features-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-    <div class="login-card">
-        <div class="card-top">
-            <div class="brand-icon">
-                <i class="fas fa-robot"></i>
-            </div>
-            <h1>EXO AI 助手</h1>
-            <p>扫码登录，开始智能对话</p>
-        </div>
 
-        <div class="card-body">
-            <div class="qr-section">
-                <div class="qr-wrapper" id="qrWrapper">
-                    <div id="qrcode"></div>
-                </div>
-                <div class="qr-status" id="qrStatus">
-                    <i class="fas fa-mobile-alt"></i>
-                    <span>请使用微信扫描二维码</span>
-                </div>
-                <button class="qr-refresh-btn" id="refreshBtn" onclick="initQRLogin()" style="display:none;">
-                    <i class="fas fa-redo"></i> 刷新二维码
+    <!-- 背景层 -->
+    <div class="grid-bg"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <!-- 登录卡片 -->
+    <div class="login-wrapper">
+        <div class="login-card">
+            <div class="card-header">
+                <div class="brand-icon"><i class="fas fa-robot"></i></div>
+                <h1>EXO AI</h1>
+                <p>分布式推理集群 · 安全接入</p>
+            </div>
+
+            <!-- 模式切换：登录 / 注册 -->
+            <div class="mode-switcher">
+                <button class="mode-btn active" id="btnLoginMode" onclick="switchMode('login')">
+                    <i class="fas fa-sign-in-alt"></i> 账号登录
+                </button>
+                <button class="mode-btn" id="btnRegisterMode" onclick="switchMode('register')">
+                    <i class="fas fa-user-plus"></i> 注册账号
                 </button>
             </div>
 
-            <div class="features">
-                <div class="feature-item">
-                    <i class="fas fa-bolt"></i>
-                    <span>AI 智能对话</span>
-                </div>
-                <div class="feature-item">
-                    <i class="fas fa-shield-alt"></i>
-                    <span>安全加密</span>
-                </div>
-                <div class="feature-item">
-                    <i class="fas fa-code"></i>
-                    <span>API 接口调用</span>
-                </div>
-                <div class="feature-item">
-                    <i class="fas fa-cloud"></i>
-                    <span>云端推理服务</span>
+            <!-- 登录表单 -->
+            <div class="form-panel active" id="panelLogin">
+                <form id="loginForm" onsubmit="handleEmailLogin(event)">
+                    <div class="form-group">
+                        <label>邮箱地址</label>
+                        <div class="input-wrap">
+                            <i class="fas fa-envelope"></i>
+                            <input type="email" id="loginEmail" class="form-input"
+                                   placeholder="请输入邮箱地址" required autocomplete="email">
+                        </div>
+                        <div class="error-text" id="loginEmailError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>密码</label>
+                        <div class="input-wrap">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="loginPassword" class="form-input"
+                                   placeholder="请输入密码" required minlength="6" autocomplete="current-password">
+                        </div>
+                        <div class="error-text" id="loginPasswordError"></div>
+                    </div>
+
+                    <button type="submit" class="submit-btn" id="loginBtn">
+                        <span class="btn-text">登 录</span>
+                        <span class="spinner"><i class="fas fa-spinner fa-spin"></i></span>
+                    </button>
+                </form>
+
+                <div class="form-footer">
+                    还没有账号？<a onclick="switchMode('register')">立即注册</a>
                 </div>
             </div>
 
-            <div class="admin-link">
+            <!-- 注册表单 -->
+            <div class="form-panel" id="panelRegister">
+                <form id="registerForm" onsubmit="handleEmailRegister(event)">
+                    <div class="form-group">
+                        <label>邮箱地址</label>
+                        <div class="input-wrap">
+                            <i class="fas fa-envelope"></i>
+                            <input type="email" id="registerEmail" class="form-input"
+                                   placeholder="请输入邮箱地址" required autocomplete="email">
+                        </div>
+                        <div class="error-text" id="registerEmailError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>昵称（可选）</label>
+                        <div class="input-wrap">
+                            <i class="fas fa-user"></i>
+                            <input type="text" id="registerNickname" class="form-input"
+                                   placeholder="设置您的昵称" autocomplete="nickname">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>密码</label>
+                        <div class="input-wrap">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="registerPassword" class="form-input"
+                                   placeholder="至少 6 位密码" required minlength="6" autocomplete="new-password">
+                        </div>
+                        <div class="error-text" id="registerPasswordError"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>确认密码</label>
+                        <div class="input-wrap">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="registerConfirmPassword" class="form-input"
+                                   placeholder="再次输入密码" required minlength="6" autocomplete="new-password">
+                        </div>
+                        <div class="error-text" id="registerConfirmPasswordError"></div>
+                    </div>
+
+                    <button type="submit" class="submit-btn" id="registerBtn">
+                        <span class="btn-text">注 册</span>
+                        <span class="spinner"><i class="fas fa-spinner fa-spin"></i></span>
+                    </button>
+                </form>
+
+                <div class="form-footer">
+                    已有账号？<a onclick="switchMode('login')">返回登录</a>
+                </div>
+            </div>
+
+            <!-- 特性展示 -->
+            <div class="features-grid" style="padding: 0 2.4rem;">
+                <div class="feature-tag"><i class="fas fa-bolt"></i><span>AI 智能对话</span></div>
+                <div class="feature-tag"><i class="fas fa-shield-alt"></i><span>端到端加密</span></div>
+                <div class="feature-tag"><i class="fas fa-code"></i><span>API 接口调用</span></div>
+                <div class="feature-tag"><i class="fas fa-cloud"></i><span>分布式推理</span></div>
+            </div>
+
+            <div class="admin-entry" style="padding: 0 2.4rem;">
                 <a href="/admin"><i class="fas fa-user-cog"></i> 管理员入口</a>
             </div>
         </div>
@@ -272,142 +575,150 @@
 
     <script>
         const API_BASE = '';
-        let currentQrId = null;
-        let pollTimer = null;
 
-        function showToast(msg) {
+        // ==================== Toast ====================
+        function showToast(msg, type = '') {
             const t = document.getElementById('toast');
             t.textContent = msg;
-            t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 2500);
+            t.className = `toast show ${type}`;
+            setTimeout(() => t.classList.remove('show'), 3200);
         }
 
-        async function initQRLogin() {
-            if (pollTimer) clearInterval(pollTimer);
+        // ==================== 模式切换 ====================
+        function switchMode(mode) {
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.form-panel').forEach(p => p.classList.remove('active'));
 
-            const wrapper = document.getElementById('qrWrapper');
-            const statusEl = document.getElementById('qrStatus');
-            const refreshBtn = document.getElementById('refreshBtn');
-            const qrcodeEl = document.getElementById('qrcode');
-
-            qrcodeEl.innerHTML = '';
-            wrapper.className = 'qr-wrapper';
-            refreshBtn.style.display = 'none';
-            statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>正在生成小程序码...</span>';
-
-            try {
-                const res = await fetch(`${API_BASE}/login/qrcode`, { method: 'POST' });
-                const data = await res.json();
-
-                if (!data.success || !data.data?.qrcode_id) {
-                    throw new Error(data.detail || '创建登录码失败');
-                }
-
-                currentQrId = data.data.qrcode_id;
-
-                if (data.data.mode === 'simulate' || !data.data.enabled) {
-                    new QRCode(qrcodeEl, {
-                        text: data.data.qrcode_url || currentQrId,
-                        width: 180,
-                        height: 180,
-                        colorDark: '#1a1a2e',
-                        colorLight: '#ffffff',
-                        correctLevel: QRCode.CorrectLevel.M
-                    });
-
-                    statusEl.innerHTML = '<i class="fab fa-weixin" style="color:#07c160;"></i><span>请使用微信扫描二维码</span>';
-                } else {
-                    try {
-                        const imgRes = await fetch(`${API_BASE}/login/qrcode/${currentQrId}/image`);
-                        if (imgRes.ok) {
-                            const blob = await imgRes.blob();
-                            const imgUrl = URL.createObjectURL(blob);
-                            qrcodeEl.innerHTML = `<img src="${imgUrl}" alt="小程序码" style="width:180px;height:180px;border-radius:8px;" />`;
-                            statusEl.innerHTML = '<i class="fas fa-mobile-alt" style="color:#07c160;"></i><span>请使用微信扫描小程序码</span>';
-                        } else {
-                            throw new Error('获取小程序码失败');
-                        }
-                    } catch (imgError) {
-                        console.warn('获取小程序码失败，使用备用方案:', imgError);
-                        new QRCode(qrcodeEl, {
-                            text: data.data.qrcode_url || currentQrId,
-                            width: 180,
-                            height: 180,
-                            colorDark: '#1a1a2e',
-                            colorLight: '#ffffff',
-                            correctLevel: QRCode.CorrectLevel.M
-                        });
-                        statusEl.innerHTML = '<i class="fab fa-weixin" style="color:#07c160;"></i><span>请使用微信扫描二维码</span>';
-                    }
-                }
-
-                wrapper.classList.add('active');
-                startPolling();
-            } catch (e) {
-                statusEl.innerHTML = `<i class="fas fa-exclamation-circle" style="color:#ef4444;"></i><span>${e.message}</span>`;
-                refreshBtn.style.display = 'inline-flex';
+            if (mode === 'login') {
+                document.getElementById('btnLoginMode').classList.add('active');
+                document.getElementById('panelLogin').classList.add('active');
+            } else {
+                document.getElementById('btnRegisterMode').classList.add('active');
+                document.getElementById('panelRegister').classList.add('active');
             }
         }
 
-        function startPolling() {
-            if (pollTimer) clearInterval(pollTimer);
-
-            pollTimer = setInterval(async () => {
-                if (!currentQrId) return;
-
-                try {
-                    const res = await fetch(`${API_BASE}/login/qrcode/${currentQrId}`);
-                    const data = await res.json();
-                    const status = data.data?.status;
-
-                    const wrapper = document.getElementById('qrWrapper');
-                    const statusEl = document.getElementById('qrStatus');
-                    const refreshBtn = document.getElementById('refreshBtn');
-
-                    if (status === 'scanned') {
-                        wrapper.classList.remove('active');
-                        statusEl.innerHTML = '<i class="fas fa-check-circle" style="color:#07c160;"></i><span>已扫描，请在手机上确认</span>';
-                        statusEl.className = 'qr-status scanned';
-                    } else if (status === 'confirmed') {
-                        clearInterval(pollTimer);
-                        await confirmLogin();
-                    } else if (status === 'expired') {
-                        clearInterval(pollTimer);
-                        wrapper.classList.add('expired');
-                        statusEl.innerHTML = '<i class="fas fa-clock" style="color:#ef4444;"></i><span>二维码已过期</span>';
-                        refreshBtn.style.display = 'inline-flex';
-                    }
-                } catch (e) {
-                    console.error('轮询错误:', e);
-                }
-            }, 2000);
+        // ==================== 表单验证 ====================
+        function validateEmail(email) {
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
         }
 
-        async function confirmLogin() {
+        function showError(inputId, errorId, msg) {
+            document.getElementById(inputId).classList.add('error');
+            const el = document.getElementById(errorId);
+            el.textContent = msg;
+            el.classList.add('show');
+        }
+
+        function clearError(inputId, errorId) {
+            document.getElementById(inputId).classList.remove('error');
+            document.getElementById(errorId).classList.remove('show');
+        }
+
+        // 清除输入时自动清除错误状态
+        document.querySelectorAll('.form-input').forEach(input => {
+            input.addEventListener('input', function() {
+                this.classList.remove('error');
+                const errEl = this.parentElement.parentElement.querySelector('.error-text');
+                if (errEl) errEl.classList.remove('show');
+            });
+        });
+
+        // ==================== 邮箱登录 ====================
+        async function handleEmailLogin(e) {
+            e.preventDefault();
+
+            const email = document.getElementById('loginEmail').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            const btn = document.getElementById('loginBtn');
+
+            clearError('loginEmail', 'loginEmailError');
+            clearError('loginPassword', 'loginPasswordError');
+
+            let hasErr = false;
+            if (!email) { showError('loginEmail', 'loginEmailError', '请输入邮箱地址'); hasErr = true; }
+            else if (!validateEmail(email)) { showError('loginEmail', 'loginEmailError', '邮箱格式不正确'); hasErr = true; }
+            if (!password) { showError('loginPassword', 'loginPasswordError', '请输入密码'); hasErr = true; }
+            else if (password.length < 6) { showError('loginPassword', 'loginPasswordError', '密码长度至少6位'); hasErr = true; }
+            if (hasErr) return;
+
+            btn.classList.add('loading');
+            btn.disabled = true;
+
             try {
-                const res = await fetch(`${API_BASE}/login/qrcode/${currentQrId}/confirm`, { method: 'POST' });
+                const res = await fetch(`${API_BASE}/login/email`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
                 const data = await res.json();
 
                 if (data.success) {
-                    showToast('登录成功！正在跳转...');
+                    showToast('登录成功！正在跳转...', 'success');
                     setTimeout(() => window.location.href = '/user/dashboard', 800);
                 } else {
-                    showToast(data.detail || '确认失败');
-                    setTimeout(initQRLogin, 1500);
+                    const detail = data.detail || '登录失败';
+                    showToast(detail, 'error');
+                    if (detail.includes('邮箱')) showError('loginEmail', 'loginEmailError', detail);
+                    else showError('loginPassword', 'loginPasswordError', detail);
                 }
-            } catch (e) {
-                showToast('网络错误，请重试');
-                setTimeout(initQRLogin, 1500);
+            } catch (err) {
+                showToast('网络错误，请重试', 'error');
+            } finally {
+                btn.classList.remove('loading');
+                btn.disabled = false;
             }
         }
 
-        initQRLogin();
+        // ==================== 邮箱注册 ====================
+        async function handleEmailRegister(e) {
+            e.preventDefault();
 
-        setInterval(() => {
-            if (!pollTimer && !document.querySelector('.qr-wrapper.active')) {
-                initQRLogin();
+            const email = document.getElementById('registerEmail').value.trim();
+            const nickname = document.getElementById('registerNickname').value.trim();
+            const password = document.getElementById('registerPassword').value;
+            const confirmPwd = document.getElementById('registerConfirmPassword').value;
+            const btn = document.getElementById('registerBtn');
+
+            clearError('registerEmail', 'registerEmailError');
+            clearError('registerPassword', 'registerPasswordError');
+            clearError('registerConfirmPassword', 'registerConfirmPasswordError');
+
+            let hasErr = false;
+            if (!email) { showError('registerEmail', 'registerEmailError', '请输入邮箱地址'); hasErr = true; }
+            else if (!validateEmail(email)) { showError('registerEmail', 'registerEmailError', '邮箱格式不正确'); hasErr = true; }
+            if (!password) { showError('registerPassword', 'registerPasswordError', '请输入密码'); hasErr = true; }
+            else if (password.length < 6) { showError('registerPassword', 'registerPasswordError', '密码长度至少6位'); hasErr = true; }
+            if (password !== confirmPwd) { showError('registerConfirmPassword', 'registerConfirmPasswordError', '两次输入的密码不一致'); hasErr = true; }
+            if (hasErr) return;
+
+            btn.classList.add('loading');
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API_BASE}/register/email`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, nickname })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    showToast('注册成功！请登录', 'success');
+                    setTimeout(() => switchMode('login'), 1400);
+                } else {
+                    const detail = data.detail || '注册失败';
+                    showToast(detail, 'error');
+                    if (detail.includes('邮箱')) showError('registerEmail', 'registerEmailError', detail);
+                    else if (detail.includes('密码')) showError('registerPassword', 'registerPasswordError', detail);
+                }
+            } catch (err) {
+                showToast('网络错误，请重试', 'error');
+            } finally {
+                btn.classList.remove('loading');
+                btn.disabled = false;
             }
-        }, 300000);
+        }
     </script>
 </body>
 </html>

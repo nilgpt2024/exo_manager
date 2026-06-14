@@ -500,9 +500,17 @@ class NodeConnector:
     async def health_check(self) -> bool:
         """执行健康检查"""
         start_time = time.time()
-        
+
         try:
             if not self.stub:
+                # WS模式节点：通过WebSocket连接状态判断健康
+                if _is_ws_available():
+                    _ws_mgr = _get_node_ws_manager()
+                    if _ws_mgr and _ws_mgr.is_node_connected(self.node_info.node_id):
+                        self.node_info.response_time_ms = (time.time() - start_time) * 1000
+                        self.node_info.status = NodeStatus.ONLINE
+                        self.node_info.error_message = ""
+                        return True
                 return False
             
             # 使用正确的 protobuf 请求类型
@@ -945,9 +953,15 @@ class NodeConnector:
                     logger.warning(f"WebSocket 推送失败 ({node_id}): {ws_e}, 回退到 HTTP")
 
         except Exception as ws_outer_e:
-            logger.warning(f"WebSocket 推理路径异常: {ws_outer_e}, 回退到 HTTP")
+            logger.warning(f"WebSocket 推送路径异常: {ws_outer_e}, 回退到 HTTP")
 
         # 2️⃣ 回退：HTTP POST（公网直连场景）
+        # 纯WS模式节点（chatgpt_api_port=0）无HTTP通道，跳过回退
+        if self.node_info.chatgpt_api_port <= 0:
+            logger.error(f"[Inference] WS推送失败且节点 {self.node_info.node_id} 无HTTP端口(chatgpt_api_port={self.node_info.chatgpt_api_port})，无法回退")
+            yield {"success": False, "error": f"WebSocket推理失败且节点无可用HTTP通道", "node_id": self.node_info.node_id, "request_id": request_id}
+            return
+
         logger.info(f"🌐 [Inference] 回退到 HTTP POST: {target_url}")
         
         try:
@@ -1268,8 +1282,8 @@ class EXOClusterManager:
 
         # 为每个模型找首层节点，重建注册表
         for base_id, instances in model_instances.items():
-            first_node_id = None
-            inference_url = ""
+            first_node_ids = []  # 支持多首层节点（多副本场景）
+            inference_urls = {}  # {node_id: url}
             alloc_entries = []
 
             for node_id, model_id, shard in instances:
@@ -1284,20 +1298,23 @@ class EXOClusterManager:
                     "instance_id": model_id,
                 })
 
-                # 识别首层节点：start_layer == 0 或没有分片信息（单节点）
+                # 识别首层节点：start_layer == 0 或没有分片信息（单节点/不分片多副本）
                 if start_layer == 0 or (start_layer == -1 and len(instances) == 1):
-                    first_node_id = node_id
+                    first_node_ids.append(node_id)
 
-            if first_node_id and alloc_entries:
-                # 构建推理地址
-                node_info = self.nodes.get(first_node_id)
-                if node_info:
-                    inference_url = node_info.chat_completions_url or ""
+            if first_node_ids and alloc_entries:
+                # 构建所有首层节点的推理地址
+                for fnid in first_node_ids:
+                    node_info = self.nodes.get(fnid)
+                    if node_info:
+                        inference_urls[fnid] = node_info.chat_completions_url or ""
 
                 self._allocation_registry[base_id] = {
                     "allocations": alloc_entries,
-                    "first_layer_node_id": first_node_id,
-                    "inference_url": inference_url,
+                    "first_layer_node_ids": first_node_ids,       # 多首层节点列表
+                    "first_layer_node_id": first_node_ids[0],     # 兼容旧代码（默认取第一个）
+                    "inference_urls": inference_urls,             # 多推理地址
+                    "inference_url": inference_urls.get(first_node_ids[0], ""),  # 兼容旧代码
                     "full_model_id": base_id,
                     "updated_at": time.time(),
                 }
@@ -1485,17 +1502,18 @@ class EXOClusterManager:
         except Exception as e:
             logger.error(f"加载配置文件失败: {e}")
     
-    async def add_node(self, node_id: str, address: str, port: int = 50051, chatgpt_api_port: int = 52415, device_info: Dict[str, Any] = None) -> bool:
+    async def add_node(self, node_id: str, address: str, port: int = 50051, chatgpt_api_port: int = 52415, device_info: Dict[str, Any] = None, skip_grpc_connect: bool = False) -> bool:
         """
         手动添加节点
-        
+
         Args:
             node_id: 节点唯一标识
             address: IP地址或主机名
             port: gRPC端口号
             chatgpt_api_port: ChatGPT API HTTP端口号
             device_info: 节点主动注册时提供的设备信息（可选）
-            
+            skip_grpc_connect: 是否跳过gRPC连接尝试（WS注册节点应设为True）
+
         Returns:
             是否添加成功
         """
@@ -1517,20 +1535,26 @@ class EXOClusterManager:
         )
         
         self.nodes[node_id] = node_info
-        
+
         connector = NodeConnector(node_info, manager=self)
         self.connectors[node_id] = connector
-        
-        success = await connector.connect()
-        
-        if success:
-            logger.info(f"➕ 节点注册成功: {node_id}@{address}:{port} (HTTP:{chatgpt_api_port})")
+
+        if skip_grpc_connect:
+            # WS 注册节点：跳过 gRPC 连接，直接标记为在线（WS 通道已建立）
+            node_info.status = NodeStatus.ONLINE
+            node_info.last_heartbeat = time.time()
+            logger.info(f"➕ 节点注册成功(WS模式): {node_id}@{address} (跳过gRPC连接)")
         else:
-            error_msg = connector.node_info.error_message or "未知错误"
-            logger.warning(f"⚠️ 节点 {node_id} 已记录但连接失败: {error_msg}")
-            logger.info(f"   将在后台重试连接...")
-            asyncio.create_task(self._retry_connect(node_id, max_retries=5, interval=3.0))
-        
+            success = await connector.connect()
+
+            if success:
+                logger.info(f"➕ 节点注册成功: {node_id}@{address}:{port} (HTTP:{chatgpt_api_port})")
+            else:
+                error_msg = connector.node_info.error_message or "未知错误"
+                logger.warning(f"⚠️ 节点 {node_id} 已记录但连接失败: {error_msg}")
+                logger.info(f"   将在后台重试连接...")
+                asyncio.create_task(self._retry_connect(node_id, max_retries=5, interval=3.0))
+
         return True
     
     async def remove_node(self, node_id: str) -> bool:
@@ -1566,7 +1590,7 @@ class EXOClusterManager:
                 
                 if connector.channel:
                     try:
-                        connector.channel.close()
+                        await connector.channel.close()
                     except Exception:
                         pass
                 
@@ -1584,16 +1608,18 @@ class EXOClusterManager:
         logger.error(f"[RetryConnect] 节点 {node_id} 重试{max_retries}次后仍失败")
     
     async def _monitor_loop(self):
-        """后台监控循环 - 定期检查所有节点状态"""
+        """后台监控循环 - 定期检查所有节点状态（含故障恢复）"""
         logger.info("🔄 监控循环已启动")
         _first_sync_done = False  # 首次同步标记，用于重建分配注册表
         _sync_cycle_count = 0     # 同步周期计数器，用于定期重建注册表
         _REGISTRY_REBUILD_INTERVAL = 3  # 每 3 个监控周期（约30秒）重建一次注册表
+        _handled_failures = set()  # 已处理的掉线节点（避免重复触发恢复）
         while self._running:
             try:
                 online_count = 0
                 total_memory = 0
                 registry_changed = False  # 标记本轮是否有变化需要重建
+                newly_failed_nodes = []   # 本轮新发现的掉线节点
 
                 for node_id, connector in list(self.connectors.items()):
                     is_healthy = await connector.health_check()
@@ -1603,13 +1629,63 @@ class EXOClusterManager:
                         node_info = self.nodes[node_id]
                         total_memory += node_info.device_info.get('memory', 0)
 
-                        # 定期从节点获取最新状态（已加载模型、显存使用等）
-                        logger.debug(f"📊 正在获取节点 {node_id} 的实时状态...")
+                        # 节点恢复在线：从已处理集合中移除
+                        if node_id in _handled_failures:
+                            _handled_failures.discard(node_id)
+                            logger.info(f"[监控循环] 节点 {node_id} 恢复在线")
+                            try:
+                                from sys_logger import sys_log as _sl
+                                _sl.log(_sl.SUCCESS, "node", f"节点 {node_id} 恢复在线", {"node_id": node_id})
+                            except Exception:
+                                pass
+
+                        logger.debug(f"正在获取节点 {node_id} 的实时状态...")
                         old_model_count = len(connector.node_info.loaded_models)
                         await connector._fetch_loaded_models()
                         # 检测模型列表是否发生变化
                         if len(connector.node_info.loaded_models) != old_model_count:
                             registry_changed = True
+
+                    else:
+                        # 节点不健康 → 检测是否为新掉线
+                        was_online = connector.node_info.status.value == 'online'
+                        connector.node_info.status = NodeStatus.OFFLINE
+
+                        if was_online and node_id not in _handled_failures:
+                            newly_failed_nodes.append(node_id)
+                            _handled_failures.add(node_id)
+                            logger.error(f"[监控循环] 节点 {node_id} 掉线！")
+
+                            # 发射系统日志：节点掉线
+                            try:
+                                from sys_logger import sys_log as _sl
+                                _sl.log(_sl.ERROR, "node", f"节点 {node_id} 掉线", {"node_id": node_id})
+                            except Exception:
+                                pass
+
+                # ====== 故障恢复处理 ======
+                for failed_node_id in newly_failed_nodes:
+                    try:
+                        from gpu_pool_integration import SmartAllocator
+                        allocator = SmartAllocator(self)
+                        recovery_report = allocator.handle_node_failure(failed_node_id)
+
+                        self._fault_recovery_history = getattr(self, '_fault_recovery_history', [])
+                        self._fault_recovery_history.append({
+                            "timestamp": time.time(),
+                            "failed_node": failed_node_id,
+                            "report": recovery_report
+                        })
+
+                        summary = recovery_report["summary"]
+                        logger.warning(
+                            f"[FaultRecovery] 节点 {failed_node_id} 掉线恢复完成: "
+                            f"总={summary['total']}, 迁移={summary['migrated']}, "
+                            f"降级={summary['degraded']}, 丢失={summary['lost']}"
+                        )
+
+                    except Exception as e:
+                        logger.error(f"[FaultRecovery] 处理节点 {failed_node_id} 故障时出错: {e}")
 
                 # 首次同步完成后，从节点数据重建分配注册表（重启恢复）
                 if not _first_sync_done and online_count > 0:
@@ -1760,7 +1836,7 @@ class EXOClusterManager:
         model_id: str,
         model_path: str,
         n_layers: int = 32,
-        strategy: str = "memory_weighted",
+        strategy: str = "smart",
         target_nodes: Optional[List[str]] = None,
         instance_id: Optional[str] = None,
         auto_instance: bool = False
@@ -1777,7 +1853,9 @@ class EXOClusterManager:
             model_id: 模型标识符 (如 "Qwen/Qwen3-4B")
             model_path: 模型文件路径 (如 "./models/qwen3-4b")
             n_layers: 模型总层数
-            strategy: 分配策略 ('memory_weighted', 'uniform', 'performance_weighted')
+            strategy: 分配策略 ('smart', 'memory_weighted', 'uniform', 'performance_weighted')
+                       smart=智能策略(默认): 单节点优先，能不拆就不拆
+                       memory_weighted=按显存加权, uniform=均匀分配, performance_weighted=按性能加权
             target_nodes: 指定目标节点列表（可选，默认使用所有在线节点）
             instance_id: 实例ID（支持多实例，None表示默认）
             auto_instance: 是否自动生成实例ID
@@ -2001,8 +2079,11 @@ class EXOClusterManager:
             }
 
             # ✅ 注册分配信息到 _allocation_registry（供 /v1/models 查询首层节点）
+            # 支持多首层节点格式（兼容单副本场景）
             if success_count > 0 and allocation.allocations:
                 alloc_entries = []
+                fl_node_ids = []
+                fl_urls = {}
                 for alloc in allocation.allocations:
                     alloc_entries.append({
                         "node_id": alloc.get("node_id", ""),
@@ -2010,15 +2091,24 @@ class EXOClusterManager:
                         "end_layer": alloc.get("end_layer", -1),
                         "instance_id": instance_id,
                     })
+                    if alloc.get("start_layer") == 0:
+                        nid = alloc["node_id"]
+                        fl_node_ids.append(nid)
+                        c = self.connectors.get(nid)
+                        if c and c.node_info.status == NodeStatus.ONLINE:
+                            fl_urls[nid] = c.node_info.chat_completions_url
+
                 self._allocation_registry[model_id] = {
                     "allocations": alloc_entries,
+                    "first_layer_node_ids": fl_node_ids or [first_layer_node_id],
                     "first_layer_node_id": first_layer_node_id,
+                    "inference_urls": fl_urls,
                     "inference_url": inference_url,
                     "full_model_id": full_model_id,
                     "n_layers": n_layers,
                     "updated_at": time.time(),
                 }
-                logger.info(f"📋 [分配注册] 模型 {model_id} -> 首层节点: {first_layer_node_id}, 推理地址: {inference_url}")
+                logger.info(f"📋 [分配注册] 模型 {model_id} -> 首层节点: {fl_node_ids or [first_layer_node_id]}, 推理地址: {inference_url}")
             
         except Exception as e:
             logger.error(f"❌ 加载模型失败: {e}")
@@ -2033,7 +2123,7 @@ class EXOClusterManager:
         model_id: str,
         model_path: str,
         n_layers: int = 32,
-        strategy: str = "memory_weighted",
+        strategy: str = "smart",
         target_nodes: Optional[List[str]] = None,
         count: int = 1
     ) -> Dict:

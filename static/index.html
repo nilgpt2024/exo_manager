@@ -11,8 +11,20 @@
     <!-- Chart.js for visualizations -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
-    <!-- vis.js Network for P2P topology visualization -->
-    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <!-- vis.js Network for P2P topology visualization (多源备份) -->
+    <script src="https://unpkg.com/vis-network@9.1.0/standalone/umd/vis-network.min.js"></script>
+    <script>
+        if (typeof vis === 'undefined') {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.0/standalone/umd/vis-network.min.js"><\/script>');
+        }
+    </script>
+    <script>
+        if (typeof vis === 'undefined') {
+            console.error('[Topology] ❌ vis-network 加载失败！拓扑图将无法渲染，请检查网络连接');
+        } else {
+            console.log('[Topology] ✅ vis-network 加载成功');
+        }
+    </script>
     
     <!-- Marked.js for Markdown rendering (多源备份) -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -1362,6 +1374,23 @@
                 <i class="fas fa-chart-line" style="margin-right: 6px;"></i>
                 API 统计
             </button>
+            <button id="mainTabLogs" onclick="switchMainTab('logs')"
+                    class="main-tab-btn"
+                    style="
+                        flex: 1;
+                        padding: 0.75rem 1.5rem;
+                        border: none;
+                        background: transparent;
+                        color: var(--gray-500);
+                        font-weight: 600;
+                        font-size: 0.92rem;
+                        cursor: pointer;
+                        border-radius: 8px;
+                        transition: all 0.25s ease;
+                    ">
+                <i class="fas fa-scroll" style="margin-right: 6px;"></i>
+                系统日志
+            </button>
         </div>
 
         <!-- Tab 1: 集群管理 -->
@@ -2350,6 +2379,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                     <label><i class="fas fa-balance-scale"></i> 分配策略</label>
                                     <select id="inputStrategy" 
                                             style="width:100%; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.9rem;">
+                                        <option value="smart" selected>智能策略（推荐）</option>
                                         <option value="memory_weighted">按显存加权</option>
                                         <option value="uniform">均匀分配</option>
                                         <option value="performance_weighted">按性能加权</option>
@@ -2480,6 +2510,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                 <label>策略</label>
                                 <select id="previewStrategy"
                                         style="width:100%; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px;">
+                                    <option value="smart" selected>智能策略（推荐）</option>
                                     <option value="memory_weighted">按显存加权</option>
                                     <option value="uniform">均匀分配</option>
                                     <option value="performance_weighted">按性能加权</option>
@@ -3869,6 +3900,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const modelTab = document.getElementById('mainTabModel');
             const webSocketTab = document.getElementById('mainTabWebSocket');
             const apiStatsTab = document.getElementById('mainTabApiStats');
+            const logsTab = document.getElementById('mainTabLogs');
             const clusterContent = document.getElementById('tabContentCluster');
             const inferenceContent = document.getElementById('tabContentInference');
             const apiKeyContent = document.getElementById('tabContentApiKey');
@@ -3876,9 +3908,10 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const modelContent = document.getElementById('tabContentModel');
             const webSocketContent = document.getElementById('tabContentWebSocket');
             const apiStatsContent = document.getElementById('tabContentApiStats');
+            const logsContent = document.getElementById('tabContentLogs');
 
             // 重置所有 tab
-            [clusterTab, inferenceTab, apiKeyTab, usersTab, modelTab, webSocketTab, apiStatsTab].forEach(t => {
+            [clusterTab, inferenceTab, apiKeyTab, usersTab, modelTab, webSocketTab, apiStatsTab, logsTab].forEach(t => {
                 if (t) {
                     t.classList.remove('active');
                     t.style.background = 'transparent';
@@ -3895,6 +3928,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             if (modelContent) modelContent.style.display = 'none';
             if (webSocketContent) webSocketContent.style.display = 'none';
             if (apiStatsContent) apiStatsContent.style.display = 'none';
+            if (logsContent) logsContent.style.display = 'none';
 
             // 激活选中 tab
             let activeTab = null;
@@ -3919,6 +3953,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 activeTab = modelTab;
                 activeContent = modelContent;
                 refreshModelsList();
+                updateTargetNodeOptions();  // 切换时刷新目标节点列表
             } else if (tab === 'websocket') {
                 activeTab = webSocketTab;
                 activeContent = webSocketContent;
@@ -3937,6 +3972,11 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                         });
                     }
                 }, 50);
+            } else if (tab === 'logs') {
+                activeTab = logsTab;
+                activeContent = logsContent;
+                // 切到日志 tab 时自动加载
+                fetchLogs();
             }
 
             if (activeTab) {
@@ -7600,6 +7640,225 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 3000);
         }
+
+        // ==================== 系统日志面板 ====================
+
+        let _logAutoRefreshTimer = null;
+        let _allLogsCache = [];      // 缓存全部原始日志（用于客户端过滤）
+        const LOG_LEVEL_STYLES = {
+            info:    { bg: '#1f2937', icon: 'ℹ️',  color: '#60a5fa', label: 'INFO' },
+            success: { bg: '#14532d', icon: '✅', color: '#34d399', label: 'OK  ' },
+            warning: { bg: '#451a03', icon: '⚠️',  color: '#fbbf24', label: 'WARN' },
+            error:   { bg: '#450a0a', icon: '❌', color: '#f87171', label: 'ERR ' }
+        };
+        const CATEGORY_LABELS = {
+            'allocation':     '模型分配',
+            'fault-recovery': '故障恢复',
+            'node':           '节点状态',
+            'model':          '模型管理'
+        };
+
+        async function fetchLogs() {
+            const btn = document.getElementById('logRefreshBtn');
+            const icon = document.getElementById('logRefreshIcon');
+            if (btn) { btn.disabled = true; }
+            if (icon) { icon.classList.add('fa-spin'); }
+
+            try {
+                const level = document.getElementById('logLevelFilter')?.value || '';
+                const category = document.getElementById('logCategoryFilter')?.value || '';
+
+                const params = new URLSearchParams();
+                if (level) params.set('level', level);
+                if (category) params.set('category', category);
+                params.set('limit', '200');
+
+                const resp = await fetch(`/api/logs?${params}`);
+                const result = await resp.json();
+
+                if (result.success) {
+                    _allLogsCache = result.data.logs;
+                    renderLogs(_allLogsCache);
+                    updateLogStats(result.data.total);
+
+                    // 更新分类下拉选项
+                    updateCategoryOptions(result.data.categories);
+                }
+            } catch (e) {
+                console.error('[Logs] 获取失败:', e);
+                renderErrorState();
+            } finally {
+                if (btn) { btn.disabled = false; }
+                if (icon) { icon.classList.remove('fa-spin'); }
+            }
+        }
+
+        function renderLogs(logs) {
+            const container = document.getElementById('logContainer');
+            if (!container) return;
+
+            if (!logs || logs.length === 0) {
+                container.innerHTML = `
+                    <div style="display:flex;flex-direction:column;align-items:center;
+                                justify-content:center;height:300px;color:#484f58;">
+                        <i class="fas fa-scroll" style="font-size:3rem;margin-bottom:1rem;opacity:0.4;"></i>
+                        <p>暂无系统日志</p>
+                        <p style="font-size:0.78rem;margin-top:0.3rem;">模型加载、节点状态变更等事件将在此显示</p>
+                    </div>`;
+                return;
+            }
+
+            let html = '';
+            logs.forEach((entry, idx) => {
+                const style = LOG_LEVEL_STYLES[entry.level] || LOG_LEVEL_STYLES.info;
+                const catLabel = CATEGORY_LABELS[entry.category] || entry.category;
+
+                // 构建详情展示
+                let detailHtml = '';
+                if (entry.detail && Object.keys(entry.detail).length > 0) {
+                    const detailStr = Object.entries(entry.detail)
+                        .map(([k, v]) => `<span style="color:#8b949e">${k}=${JSON.stringify(v)}</span>`)
+                        .join(' ');
+                    detailHtml = `<div style="color:#8b949e;font-size:0.76rem;margin-left:2.5em;
+                                       margin-top:-4px;padding-bottom:6px;border-bottom:1px solid #21262d;">
+                                        ${detailHtml}</div>`;
+                }
+
+                // 新日志高亮动画
+                const isNew = idx < 3 ? 'animation: logFadeIn 0.3s ease-out;' : '';
+
+                html += `
+                    <div style="
+                        display: flex; gap: 0.75rem; padding: 6px 10px;
+                        border-radius: 6px; margin-bottom: 2px;
+                        background: ${idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)'};
+                        ${isNew}
+                    " title="${entry.full_time}">
+                        <!-- 时间 -->
+                        <span style="color:#6e7681; min-width: 65px; flex-shrink: 0;
+                                     font-variant-numeric: tabular-nums;">
+                            ${entry.timestamp}
+                        </span>
+                        <!-- 级别标签 -->
+                        <span style="background:${style.bg}; color:${style.color};
+                                     padding: 1px 8px; border-radius: 4px; font-size: 0.72rem;
+                                     font-weight: 700; min-width: 42px; text-align: center;
+                                     flex-shrink: 0; letter-spacing: 0.5px;">
+                            ${style.label}
+                        </span>
+                        <!-- 分类标签 -->
+                        <span style="background:rgba(99,102,241,0.15); color:#818cf8;
+                                     padding: 1px 7px; border-radius: 4px; font-size: 0.72rem;
+                                     font-weight: 500; flex-shrink: 0;">
+                            ${catLabel}
+                        </span>
+                        <!-- 消息 -->
+                        <span style="color:#c9d1d9; word-break: break-word;">
+                            ${escapeHtml(entry.message)}
+                        </span>
+                    </div>
+                    ${detailHtml}
+                `;
+            });
+
+            container.innerHTML = html;
+
+            // 自动滚动到底部（显示最新）
+            container.scrollTop = 0;
+        }
+
+        function renderErrorState() {
+            const container = document.getElementById('logContainer');
+            if (!container) return;
+            container.innerHTML = `
+                <div style="display:flex;align-items:center;justify-content:center;height:200px;color:#f87171;">
+                    <i class="fas fa-exclamation-triangle" style="margin-right:0.5rem;"></i>
+                    获取日志失败，请检查网络连接
+                </div>`;
+        }
+
+        function updateLogStats(total) {
+            const el = document.getElementById('logStats');
+            if (el) el.textContent = `共 ${total} 条日志`;
+        }
+
+        function updateCategoryOptions(categories) {
+            const sel = document.getElementById('logCategoryFilter');
+            if (!sel || !categories) return;
+
+            const currentVal = sel.value;
+            sel.innerHTML = '<option value="">全部分类</option>';
+            categories.forEach(cat => {
+                const label = CATEGORY_LABELS[cat] || cat;
+                sel.innerHTML += `<option value="${cat}">${label}</option>`;
+            });
+            sel.value = currentVal;
+        }
+
+        function filterLogs() {
+            fetchLogs();  // 服务端过滤更高效
+        }
+
+        async function clearLogs() {
+            if (!confirm('确定要清空所有系统日志吗？')) return;
+
+            try {
+                const resp = await fetch('/api/logs/clear', { method: 'POST' });
+                const result = await resp.json();
+
+                if (result.success) {
+                    _allLogsCache = [];
+                    renderLogs([]);
+                    updateLogStats(0);
+                    showToast('日志已清空', 'success');
+                }
+            } catch (e) {
+                showToast('清空失败: ' + e.message, 'error');
+            }
+        }
+
+        function toggleAutoRefresh() {
+            const checked = document.getElementById('logAutoRefresh')?.checked;
+
+            if (_logAutoRefreshTimer) {
+                clearInterval(_logAutoRefreshTimer);
+                _logAutoRefreshTimer = null;
+            }
+
+            if (checked) {
+                _logAutoRefreshTimer = setInterval(fetchLogs, 5000);
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 日志淡入动画 CSS（动态注入）
+        (function() {
+            const style = document.createElement('style');
+            style.textContent = `
+                @keyframes logFadeIn {
+                    from { opacity: 0; transform: translateX(-12px); }
+                    to   { opacity: 1; transform: translateX(0); }
+                }
+            `;
+            document.head.appendChild(style);
+        })();
+
+        // 页面加载后如果当前在日志 tab 则自动启动刷新
+        (function initLogPanel() {
+            document.addEventListener('DOMContentLoaded', () => {
+                // 延迟初始化，避免阻塞
+                setTimeout(() => {
+                    if (document.getElementById('logAutoRefresh')?.checked) {
+                        _logAutoRefreshTimer = setInterval(fetchLogs, 5000);
+                    }
+                }, 1000);
+            });
+        })();
     </script>
     
     <!-- 自定义模型对话框 -->
@@ -8033,7 +8292,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                             ">
                         <option value="">-- 选择节点 --</option>
                     </select>
-                    <button onclick="showNodeDetails()" 
+                    <button onclick="showNodeDetails()"
                             style="
                                 width: 100%;
                                 padding: 0.75rem;
@@ -8049,6 +8308,92 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                             onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none'">
                         <i class="fas fa-search"></i> 查看详情
                     </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 系统日志 -->
+        <div id="tabContentLogs" class="container" style="display: none;">
+            <!-- 日志控制栏 -->
+            <div style="
+                display: flex;
+                gap: 0.75rem;
+                align-items: center;
+                margin-bottom: 1rem;
+                flex-wrap: wrap;
+            ">
+                <!-- 级别过滤 -->
+                <select id="logLevelFilter" onchange="filterLogs()"
+                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300);
+                                       border-radius: 8px; font-size: 0.85rem; background: white;">
+                    <option value="">全部级别</option>
+                    <option value="info">ℹ️ 信息</option>
+                    <option value="success">✅ 成功</option>
+                    <option value="warning">⚠️ 警告</option>
+                    <option value="error">❌ 错误</option>
+                </select>
+
+                <!-- 分类过滤 -->
+                <select id="logCategoryFilter" onchange="filterLogs()"
+                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300);
+                                       border-radius: 8px; font-size: 0.85rem; background: white;">
+                    <option value="">全部分类</option>
+                </select>
+
+                <!-- 自动刷新开关 -->
+                <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--gray-600); cursor: pointer;">
+                    <input type="checkbox" id="logAutoRefresh" checked
+                           onchange="toggleAutoRefresh()" style="cursor: pointer;">
+                    自动刷新 (5s)
+                </label>
+
+                <!-- 手动刷新 -->
+                <button onclick="fetchLogs()" id="logRefreshBtn"
+                        style="padding: 0.5rem 1rem; background: var(--primary); color: white;
+                               border: none; border-radius: 8px; cursor: pointer;
+                               font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;"
+                               onmouseover="this.style.background='var(--primary-dark)'"
+                               onmouseout="this.style.background='var(--primary)'">
+                    <i class="fas fa-sync-alt" id="logRefreshIcon"></i> 刷新
+                </button>
+
+                <!-- 清空日志 -->
+                <button onclick="clearLogs()"
+                        style="padding: 0.5rem 1rem; background: transparent; color: var(--danger);
+                               border: 1px solid var(--danger); border-radius: 8px;
+                               cursor: pointer; font-size: 0.85rem; font-weight: 600;"
+                               onmouseover="this.style.background='var(--danger)'; this.style.color='white'"
+                               onmouseout="this.style.background='transparent'; this.style.color='var(--danger)'">
+                    <i class="fas fa-trash-alt"></i> 清空
+                </button>
+
+                <!-- 统计信息 -->
+                <span id="logStats" style="margin-left: auto; font-size: 0.82rem; color: var(--gray-500);">
+                    共 0 条日志
+                </span>
+            </div>
+
+            <!-- 日志容器 -->
+            <div id="logContainer" style="
+                background: #0d1117;
+                border-radius: 12px;
+                padding: 1rem;
+                min-height: 500px;
+                max-height: 70vh;
+                overflow-y: auto;
+                font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+                font-size: 0.83rem;
+                line-height: 1.7;
+                border: 1px solid #30363d;
+                box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);
+            ">
+                <div id="logEmptyState" style="
+                    display: flex; flex-direction: column; align-items: center;
+                    justify-content: center; height: 300px; color: #484f58;
+                ">
+                    <i class="fas fa-scroll" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.4;"></i>
+                    <p>暂无系统日志</p>
+                    <p style="font-size: 0.78rem; margin-top: 0.3rem;">模型加载、节点状态变更等事件将在此显示</p>
                 </div>
             </div>
         </div>

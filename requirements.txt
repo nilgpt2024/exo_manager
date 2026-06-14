@@ -21,5 +21,8 @@ aiohttp>=3.10.0
 # 文件上传支持 (FastAPI表单)
 python-multipart>=0.0.12
 
-# 开发依赖 (可选)
-# pytest>=8.0.0
+# 安全: 密码哈希 (推荐, 未安装则回退到 PBKDF2)
+bcrypt>=4.2.0
+
+# 安全: 数据加密 (API Key 加密存储)
+cryptography>=42.0.0

@@ -1,0 +1,1254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EXO - 分布式AI推理集群平台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.7);
+            --accent-cyan: #00f5d4;
+            --accent-blue: #00bbf9;
+            --accent-purple: #9b5de5;
+            --accent-pink: #f15bb5;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-glow: rgba(0, 245, 212, 0.2);
+            --gradient-main: linear-gradient(135deg, #00f5d4 0%, #00bbf9 50%, #9b5de5 100%);
+            --gradient-dark: linear-gradient(180deg, #0a0e17 0%, #111827 100%);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* ===== 背景动画层 ===== */
+        .bg-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        /* 网格背景 */
+        .grid-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 245, 212, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 245, 212, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            z-index: 0;
+            animation: gridMove 20s linear infinite;
+        }
+
+        @keyframes gridMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(60px, 60px); }
+        }
+
+        /* 浮动光球 */
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.4;
+            z-index: 0;
+            animation: float 15s ease-in-out infinite;
+        }
+
+        .orb-1 {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-cyan), transparent);
+            top: -200px;
+            right: -200px;
+            animation-delay: 0s;
+        }
+
+        .orb-2 {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, var(--accent-purple), transparent);
+            bottom: -150px;
+            left: -150px;
+            animation-delay: -5s;
+        }
+
+        .orb-3 {
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, var(--accent-blue), transparent);
+            top: 40%;
+            left: 30%;
+            animation-delay: -10s;
+            opacity: 0.25;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            25% { transform: translate(30px, -30px) scale(1.05); }
+            50% { transform: translate(-20px, 20px) scale(0.95); }
+            75% { transform: translate(20px, 10px) scale(1.02); }
+        }
+
+        /* ===== 导航栏 ===== */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            backdrop-filter: blur(20px);
+            background: rgba(10, 14, 23, 0.8);
+            border-bottom: 1px solid var(--border-glow);
+            transition: all 0.3s ease;
+        }
+
+        .navbar.scrolled {
+            padding: 0.7rem 2rem;
+            background: rgba(10, 14, 23, 0.95);
+        }
+
+        .logo {
+            font-family: 'Orbitron', monospace;
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: var(--gradient-main);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 3px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: var(--gradient-main);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            -webkit-text-fill-color: white;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .nav-links a::after {
+            content: '';
+            position: absolute;
+            bottom: -4px;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--gradient-main);
+            transition: width 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            color: var(--accent-cyan);
+        }
+
+        .nav-links a:hover::after {
+            width: 100%;
+        }
+
+        .nav-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 0.7rem 1.8rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            border: none;
+            font-family: inherit;
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+
+        .btn-ghost:hover {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+            box-shadow: 0 0 20px rgba(0, 245, 212, 0.15);
+        }
+
+        .btn-primary {
+            background: var(--gradient-main);
+            color: #0a0e17;
+            box-shadow: 0 4px 20px rgba(0, 245, 212, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0, 245, 212, 0.45);
+        }
+
+        .btn-large {
+            padding: 1rem 2.5rem;
+            font-size: 1.05rem;
+        }
+
+        /* ===== Hero 区域 ===== */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8rem 2rem 4rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero-content {
+            max-width: 1200px;
+            text-align: center;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            align-items: center;
+        }
+
+        .hero-text {
+            text-align: left;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1.2rem;
+            background: rgba(0, 245, 212, 0.08);
+            border: 1px solid rgba(0, 245, 212, 0.2);
+            border-radius: 50px;
+            font-size: 0.85rem;
+            color: var(--accent-cyan);
+            margin-bottom: 1.5rem;
+            animation: fadeInUp 0.8s ease-out;
+        }
+
+        .badge-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent-cyan);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
+        }
+
+        .hero-title {
+            font-family: 'Orbitron', monospace;
+            font-size: clamp(2.5rem, 5vw, 4rem);
+            font-weight: 900;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            animation: fadeInUp 0.8s ease-out 0.1s both;
+        }
+
+        .hero-title .highlight {
+            background: var(--gradient-main);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-desc {
+            font-size: 1.15rem;
+            color: var(--text-secondary);
+            line-height: 1.8;
+            margin-bottom: 2.5rem;
+            max-width: 520px;
+            animation: fadeInUp 0.8s ease-out 0.2s both;
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 1rem;
+            animation: fadeInUp 0.8s ease-out 0.3s both;
+        }
+
+        .hero-stats {
+            display: flex;
+            gap: 3rem;
+            margin-top: 3rem;
+            animation: fadeInUp 0.8s ease-out 0.4s both;
+        }
+
+        .stat-item {
+            text-align: left;
+        }
+
+        .stat-value {
+            font-family: 'Orbitron', monospace;
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Hero 可视化 */
+        .hero-visual {
+            position: relative;
+            animation: fadeInUp 0.8s ease-out 0.3s both;
+        }
+
+        .network-viz {
+            width: 100%;
+            aspect-ratio: 1;
+            max-width: 520px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .network-canvas {
+            width: 100%;
+            height: 100%;
+            border-radius: 20px;
+            background: rgba(17, 24, 39, 0.5);
+            border: 1px solid var(--border-glow);
+            backdrop-filter: blur(10px);
+        }
+
+        /* ===== Section 通用样式 ===== */
+        section {
+            position: relative;
+            z-index: 1;
+            padding: 6rem 2rem;
+        }
+
+        .section-header {
+            text-align: center;
+            max-width: 700px;
+            margin: 0 auto 4rem;
+        }
+
+        .section-tag {
+            font-family: 'Orbitron', monospace;
+            font-size: 0.8rem;
+            color: var(--accent-cyan);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+
+        .section-title {
+            font-family: 'Orbitron', monospace;
+            font-size: clamp(1.8rem, 3.5vw, 2.8rem);
+            font-weight: 700;
+            margin-bottom: 1rem;
+            line-height: 1.2;
+        }
+
+        .section-desc {
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+        }
+
+        /* ===== 特性区域 ===== */
+        .features {
+            background: linear-gradient(180deg, transparent, rgba(0, 245, 212, 0.02), transparent);
+        }
+
+        .features-grid {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 1.5rem;
+        }
+
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 16px;
+            padding: 2.5rem;
+            transition: all 0.4s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--gradient-main);
+            transform: scaleX(0);
+            transition: transform 0.4s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-8px);
+            border-color: rgba(0, 245, 212, 0.2);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3), 0 0 40px rgba(0, 245, 212, 0.06);
+        }
+
+        .feature-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .feature-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(135deg, rgba(0, 245, 212, 0.15), rgba(0, 187, 249, 0.1));
+            color: var(--accent-cyan);
+        }
+
+        .feature-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+        }
+
+        .feature-desc {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.7;
+        }
+
+        /* ===== 架构区域 ===== */
+        .architecture {
+            background: var(--bg-secondary);
+        }
+
+        .arch-container {
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .arch-diagram {
+            background: var(--bg-card);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 20px;
+            padding: 3rem;
+            position: relative;
+        }
+
+        .arch-flow {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .arch-node {
+            flex: 1;
+            min-width: 180px;
+            text-align: center;
+            padding: 2rem 1rem;
+            background: rgba(0, 245, 212, 0.04);
+            border: 1px solid rgba(0, 245, 212, 0.12);
+            border-radius: 16px;
+            transition: all 0.3s ease;
+        }
+
+        .arch-node:hover {
+            background: rgba(0, 245, 212, 0.08);
+            border-color: var(--accent-cyan);
+            transform: scale(1.03);
+        }
+
+        .arch-node-icon {
+            font-size: 2.2rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .arch-node-title {
+            font-weight: 700;
+            font-size: 1rem;
+            margin-bottom: 0.4rem;
+        }
+
+        .arch-node-desc {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+
+        .arch-arrow {
+            font-size: 1.5rem;
+            color: var(--accent-cyan);
+            opacity: 0.5;
+            flex-shrink: 0;
+        }
+
+        /* ===== CTA 区域 ===== */
+        .cta-section {
+            text-align: center;
+            padding: 8rem 2rem;
+            position: relative;
+        }
+
+        .cta-box {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 4rem;
+            background: linear-gradient(135deg, rgba(0, 245, 212, 0.06), rgba(155, 93, 229, 0.06));
+            border: 1px solid rgba(0, 245, 212, 0.15);
+            border-radius: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cta-box::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: conic-gradient(from 0deg, transparent, rgba(0, 245, 212, 0.08), transparent, rgba(155, 93, 229, 0.08), transparent);
+            animation: rotate 10s linear infinite;
+        }
+
+        @keyframes rotate {
+            100% { transform: rotate(360deg); }
+        }
+
+        .cta-inner {
+            position: relative;
+            z-index: 1;
+        }
+
+        .cta-title {
+            font-family: 'Orbitron', monospace;
+            font-size: clamp(1.6rem, 3vw, 2.4rem);
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .cta-desc {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+            max-width: 550px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        /* ===== 预告区域 ===== */
+        .coming-soon {
+            background: linear-gradient(180deg, transparent, rgba(155, 93, 229, 0.03));
+        }
+
+        .preview-grid {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 2rem;
+        }
+
+        .preview-card {
+            background: var(--bg-card);
+            border: 1px solid rgba(155, 93, 229, 0.15);
+            border-radius: 20px;
+            padding: 2.5rem;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.4s ease;
+        }
+
+        .preview-card:hover {
+            border-color: var(--accent-purple);
+            transform: translateY(-5px);
+            box-shadow: 0 20px 50px rgba(155, 93, 229, 0.1);
+        }
+
+        .preview-badge {
+            display: inline-block;
+            padding: 0.35rem 0.9rem;
+            background: rgba(155, 93, 229, 0.15);
+            border: 1px solid rgba(155, 93, 229, 0.3);
+            border-radius: 50px;
+            font-size: 0.75rem;
+            color: var(--accent-purple);
+            font-weight: 600;
+            letter-spacing: 1px;
+            margin-bottom: 1.5rem;
+        }
+
+        .preview-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(155, 93, 229, 0.2), rgba(241, 91, 181, 0.1));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .preview-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            margin-bottom: 0.75rem;
+        }
+
+        .preview-desc {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            line-height: 1.7;
+            margin-bottom: 1.5rem;
+        }
+
+        .preview-list {
+            list-style: none;
+        }
+
+        .preview-list li {
+            padding: 0.5rem 0;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .preview-list li::before {
+            content: '◆';
+            color: var(--accent-purple);
+            font-size: 0.65rem;
+        }
+
+        /* ===== 页脚 ===== */
+        footer {
+            position: relative;
+            z-index: 1;
+            padding: 3rem 2rem;
+            border-top: 1px solid rgba(255,255,255,0.06);
+            text-align: center;
+        }
+
+        .footer-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .footer-logo {
+            font-family: 'Orbitron', monospace;
+            font-size: 1.3rem;
+            font-weight: 700;
+            background: var(--gradient-main);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .footer-text {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+        }
+
+        /* ===== 响应式 ===== */
+        @media (max-width: 1024px) {
+            .hero-content {
+                grid-template-columns: 1fr;
+                text-align: center;
+            }
+            .hero-text {
+                text-align: center;
+            }
+            .hero-desc {
+                margin-left: auto;
+                margin-right: auto;
+            }
+            .hero-actions {
+                justify-content: center;
+            }
+            .hero-stats {
+                justify-content: center;
+            }
+            .stat-item {
+                text-align: center;
+            }
+            .network-viz {
+                max-width: 400px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .navbar {
+                padding: 0.8rem 1rem;
+            }
+            .nav-links {
+                display: none;
+            }
+            .hero {
+                padding: 7rem 1.2rem 3rem;
+            }
+            .section-title {
+                font-size: 1.8rem;
+            }
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+            .arch-flow {
+                flex-direction: column;
+            }
+            .arch-arrow {
+                transform: rotate(90deg);
+            }
+            .cta-box {
+                padding: 2.5rem 1.5rem;
+            }
+            .hero-stats {
+                flex-direction: column;
+                gap: 1.5rem;
+            }
+        }
+
+        /* 滚动显示动画 */
+        .reveal {
+            opacity: 0;
+            transform: translateY(40px);
+            transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .reveal.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* 粒子连线画布 */
+        #particleCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 背景装饰 -->
+    <div class="grid-bg"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+
+    <!-- 导航栏 -->
+    <nav class="navbar" id="navbar">
+        <div class="logo">
+            <span class="logo-icon">⬡</span>
+            EXO
+        </div>
+        <ul class="nav-links">
+            <li><a href="#features">核心能力</a></li>
+            <li><a href="#architecture">技术架构</a></li>
+            <li><a href="#future">未来规划</a></li>
+        </ul>
+        <div class="nav-actions">
+            <a href="/login" class="btn btn-ghost">登录</a>
+            <a href="/register" class="btn btn-primary">立即体验</a>
+        </div>
+    </nav>
+
+    <!-- Hero 区域 -->
+    <section class="hero">
+        <div class="hero-content">
+            <div class="hero-text">
+                <div class="hero-badge">
+                    <span class="badge-dot"></span>
+                    分布式 AI 推理引擎 · 开源驱动
+                </div>
+                <h1 class="hero-title">
+                    让每台设备<br>
+                    成为<span class="highlight">超级算力</span>
+                </h1>
+                <p class="hero-desc">
+                    EXO 是新一代分布式 AI 推理平台，通过智能模型分片与隐藏状态传递，
+                    将多台普通设备的算力聚合，以低成本运行超大语言模型。
+                    无需昂贵的 GPU 集群，即可获得企业级推理能力。
+                </p>
+                <div class="hero-actions">
+                    <a href="/register" class="btn btn-primary btn-large">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                        免费开始使用
+                    </a>
+                    <a href="#architecture" class="btn btn-ghost btn-large">了解工作原理</a>
+                </div>
+                <div class="hero-stats">
+                    <div class="stat-item">
+                        <div class="stat-value" id="statNodes">∞</div>
+                        <div class="stat-label">可扩展节点</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">&lt;50ms</div>
+                        <div class="stat-label">分片间延迟</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">70B+</div>
+                        <div class="stat-label">支持模型规模</div>
+                    </div>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="network-viz">
+                    <canvas id="particleCanvas" class="network-canvas"></canvas>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 核心特性 -->
+    <section class="features" id="features">
+        <div class="section-header reveal">
+            <div class="section-tag">// Core Features</div>
+            <h2 class="section-title">重新定义 AI 推理的边界</h2>
+            <p class="section-desc">
+                四大核心技术突破，让分布式推理从理论走向生产可用
+            </p>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card reveal">
+                <div class="feature-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                </div>
+                <h3 class="feature-title">智能模型分片</h3>
+                <p class="feature-desc">
+                    将大型模型按 Transformer 层自动分割成多个分片，每个节点只加载和执行部分层。
+                    支持异构硬件混合部署——GPU、NPU、甚至消费级显卡均可参与。
+                </p>
+            </div>
+            <div class="feature-card reveal">
+                <div class="feature-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </div>
+                <h3 class="feature-title">隐藏状态高速传递</h3>
+                <p class="feature-desc">
+                    分片间仅传递紧凑的隐藏状态张量，而非庞大的 KV 缓存。
+                    通过 gRPC 实现节点间低延迟通信，保证分片推理与完整模型推理完全等价。
+                </p>
+            </div>
+            <div class="feature-card reveal">
+                <div class="feature-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83"/><circle cx="12" cy="12" r="4"/></svg>
+                </div>
+                <h3 class="feature-title">独立 KV 缓存管理</h3>
+                <p class="feature-desc">
+                    每个节点独立管理自己负责层的 KV 缓存，采用 LRU 策略高效复用缓存资源。
+                    ModelState 统一调度多请求并发，最大化内存利用率。
+                </p>
+            </div>
+            <div class="feature-card reveal">
+                <div class="feature-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10A15.3 15.3 0 0 1 12 2z"/></svg>
+                </div>
+                <h3 class="feature-title">P2P 去中心化拓扑</h3>
+                <p class="feature-desc">
+                    基于 P2P 协议构建弹性网络拓扑，支持节点动态加入与退出。
+                    内网穿透技术让 NAT 后设备也能无缝接入集群，无需公网 IP。
+                </p>
+            </div>
+            <div class="feature-card reveal">
+                <div class="feature-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                </div>
+                <h3 class="feature-title">OpenAI 兼容 API</h3>
+                <p class="feature-desc">
+                    完全兼容 OpenAI API 格式，支持 /v1/chat/completions 和流式输出。
+                    一行代码即可将现有应用迁移到 EXO 集群，零学习成本切换。
+                </p>
+            </div>
+            <div class="feature-card reveal">
+                <div class="feature-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </div>
+                <h3 class="feature-title">企业级安全体系</h3>
+                <p class="feature-desc">
+                    API Key 管理、JWT 身份认证、请求配额控制、操作审计日志一应俱全。
+                    AES-256 加密通信，确保数据在传输和存储过程中的绝对安全。
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 技术架构 -->
+    <section class="architecture" id="architecture">
+        <div class="section-header reveal">
+            <div class="section-tag">// How It Works</div>
+            <h2 class="section-title">分布式推理工作流程</h2>
+            <p class="section-desc">
+                从用户请求到模型响应，每一步都经过精心优化
+            </p>
+        </div>
+        <div class="arch-container reveal">
+            <div class="arch-diagram">
+                <div class="arch-flow">
+                    <div class="arch-node">
+                        <div class="arch-node-icon">📥</div>
+                        <div class="arch-node-title">接收请求</div>
+                        <div class="arch-node-desc">OpenAI 兼容接口<br>负载均衡分发</div>
+                    </div>
+                    <div class="arch-arrow">→</div>
+                    <div class="arch-node">
+                        <div class="arch-node-icon">✂️</div>
+                        <div class="arch-node-title">模型分片</div>
+                        <div class="arch-node-desc">按层切分权重<br>分配到各节点</div>
+                    </div>
+                    <div class="arch-arrow">→</div>
+                    <div class="arch-node">
+                        <div class="arch-node-icon">🔄</div>
+                        <div class="arch-node-title">隐藏状态传递</div>
+                        <div class="arch-node-desc">gRPC 高速通道<br>逐层接力推理</div>
+                    </div>
+                    <div class="arch-arrow">→</div>
+                    <div class="arch-node">
+                        <div class="arch-node-icon">📤</div>
+                        <div class="arch-node-title">聚合输出</div>
+                        <div class="arch-node-desc">末层生成 logits<br>流式返回结果</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA 行动召唤 -->
+    <section class="cta-section">
+        <div class="cta-box reveal">
+            <div class="cta-inner">
+                <h2 class="cta-title">准备好构建你的 AI 推理集群了吗？</h2>
+                <p class="cta-desc">
+                    注册账号，立即体验分布式 AI 推理的强大能力。支持私有化部署，数据永不出域。
+                </p>
+                <div class="cta-buttons">
+                    <a href="/register" class="btn btn-primary btn-large">
+                        免费注册
+                    </a>
+                    <a href="/login" class="btn btn-ghost btn-large">
+                        已有账号？登录
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 未来规划预告 -->
+    <section class="coming-soon" id="future">
+        <div class="section-header reveal">
+            <div class="section-tag">// Coming Soon</div>
+            <h2 class="section-title">未来已来 · 个人算力共享计划</h2>
+            <p class="section-desc">
+                你的闲置设备也能成为 AI 基础设施的一部分
+            </p>
+        </div>
+        <div class="preview-grid">
+            <div class="preview-card reveal">
+                <span class="preview-badge">即将推出</span>
+                <div class="preview-icon">💻</div>
+                <h3 class="preview-title">个人设备一键接入</h3>
+                <p class="preview-desc">
+                    无需复杂配置，下载 EXO Node 客户端即可将个人电脑、笔记本加入推理集群。
+                    支持 Windows / macOS / Linux 全平台运行。
+                </p>
+                <ul class="preview-list">
+                    <li>图形化安装向导，3 分钟完成配置</li>
+                    <li>自动检测硬件并匹配最优任务</li>
+                    <li>后台静默运行，不影响日常使用</li>
+                    <li>断线自动重连，容错机制完善</li>
+                </ul>
+            </div>
+            <div class="preview-card reveal">
+                <span class="preview-badge">收益模式</span>
+                <div class="preview-icon">💰</div>
+                <h3 class="preview-title">算力贡献获取收益</h3>
+                <p class="preview-desc">
+                    根据你贡献的 GPU 算力和在线时长，获得相应的算力积分奖励。
+                    积分可用于兑换推理服务额度或提现变现。
+                </p>
+                <ul class="preview-list">
+                    <li>实时统计贡献量和预估收益</li>
+                    <li>透明公正的任务分配算法</li>
+                    <li>多种提现方式灵活选择</li>
+                    <li>邀请好友额外获得奖励</li>
+                </ul>
+            </div>
+            <div class="preview-card reveal">
+                <span class="preview-badge">生态愿景</span>
+                <div class="preview-icon">🌐</div>
+                <h3 class="preview-title">去中心化 AI 网络</h3>
+                <p class="preview-desc">
+                    我们正在构建一个由全球个人设备组成的去中心化 AI 推理网络。
+                    每个参与者既是使用者，也是建设者。
+                </p>
+                <ul class="preview-list">
+                    <li>打破大公司对 AI 算力的垄断</li>
+                    <li>降低 AI 技术的使用门槛</li>
+                    <li>促进 AI 技术民主化和普及</li>
+                    <li>共建开放的 AI 基础设施生态</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- 页脚 -->
+    <footer>
+        <div class="footer-content">
+            <div class="footer-logo">⬡ EXO</div>
+            <div class="footer-text">Distributed AI Inference Platform &copy; 2025 · Powered by Open Source Community</div>
+        </div>
+    </footer>
+
+    <script>
+        // ===== 导航栏滚动效果 =====
+        const navbar = document.getElementById('navbar');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 50) {
+                navbar.classList.add('scrolled');
+            } else {
+                navbar.classList.remove('scrolled');
+            }
+        });
+
+        // ===== 滚动显示动画 =====
+        const revealElements = document.querySelectorAll('.reveal');
+        const revealObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
+
+        revealElements.forEach(el => revealObserver.observe(el));
+
+        // ===== 粒子网络可视化 =====
+        const canvas = document.getElementById('particleCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+        }
+
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        class Particle {
+            constructor(w, h) {
+                this.w = w;
+                this.h = h;
+                this.reset();
+            }
+            reset() {
+                this.x = Math.random() * this.w;
+                this.y = Math.random() * this.h;
+                this.vx = (Math.random() - 0.5) * 0.8;
+                this.vy = (Math.random() - 0.5) * 0.8;
+                this.radius = Math.random() * 2.5 + 1;
+                this.color = ['#00f5d4', '#00bbf9', '#9b5de5'][Math.floor(Math.random() * 3)];
+                this.alpha = Math.random() * 0.5 + 0.3;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                if (this.x < 0 || this.x > this.w) this.vx *= -1;
+                if (this.y < 0 || this.y > this.h) this.vy *= -1;
+            }
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.alpha;
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        const particles = [];
+        const particleCount = 55;
+
+        function initParticles() {
+            particles.length = 0;
+            const w = canvas.width / window.devicePixelRatio;
+            const h = canvas.height / window.devicePixelRatio;
+            for (let i = 0; i < particleCount; i++) {
+                particles.push(new Particle(w, h));
+            }
+        }
+
+        initParticles();
+
+        function connectParticles(ctx, w, h) {
+            const maxDist = 130;
+            for (let i = 0; i < particles.length; i++) {
+                for (let j = i + 1; j < particles.length; j++) {
+                    const dx = particles[i].x - particles[j].x;
+                    const dy = particles[i].y - particles[j].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < maxDist) {
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        ctx.strokeStyle = `rgba(0, 245, 212, ${0.12 * (1 - dist / maxDist)})`;
+                        ctx.lineWidth = 0.8;
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+
+        function animate() {
+            const w = canvas.width / window.devicePixelRatio;
+            const h = canvas.height / window.devicePixelRatio;
+
+            ctx.clearRect(0, 0, w, h);
+
+            // 绘制中心光晕
+            const gradient = ctx.createRadialGradient(w/2, h/2, 0, w/2, h/2, w * 0.4);
+            gradient.addColorStop(0, 'rgba(0, 245, 212, 0.06)');
+            gradient.addColorStop(1, 'transparent');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, w, h);
+
+            particles.forEach(p => {
+                p.update();
+                p.draw(ctx);
+            });
+
+            connectParticles(ctx, w, h);
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+
+        // ===== 数字计数动画 =====
+        let hasAnimatedStats = false;
+        const statsObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting && !hasAnimatedStats) {
+                    hasAnimatedStats = true;
+                    animateValue('statNodes', 0, 256, 2000, '+');
+                }
+            });
+        }, { threshold: 0.5 });
+
+        const statsEl = document.querySelector('.hero-stats');
+        if (statsEl) statsObserver.observe(statsEl);
+
+        function animateValue(id, start, end, duration, suffix = '') {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const startTime = performance.now();
+            function update(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const eased = 1 - Math.pow(1 - progress, 3);
+                const current = Math.floor(start + (end - start) * eased);
+                el.textContent = current + suffix;
+                if (progress < 1) requestAnimationFrame(update);
+            }
+            requestAnimationFrame(update);
+        }
+    </script>
+</body>
+</html>

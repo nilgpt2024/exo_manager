@@ -53,6 +53,44 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+
+# ==================== 认证/额度结果缓存 ====================
+# 避免每次请求都查 SQLite，减少首 token 延迟 10-50ms
+
+class _TTLCache:
+    """简单的线程安全 TTL 缓存"""
+
+    def __init__(self, ttl: float = 5.0):
+        self._cache: Dict[str, Tuple[float, Any]] = {}  # key -> (expiry, value)
+        self._ttl = ttl
+
+    def get(self, key: str) -> Optional[Any]:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if entry[0] < time.time():
+            del self._cache[key]
+            return None
+        return entry[1]
+
+    def set(self, key: str, value: Any, ttl: Optional[float] = None):
+        self._cache[key] = (time.time() + (ttl or self._ttl), value)
+
+    def invalidate(self, key: str):
+        """失效单个 key"""
+        self._cache.pop(key, None)
+
+    def invalidate_prefix(self, prefix: str):
+        """按前缀批量失效（如扣减额度后清除某用户所有缓存）"""
+        keys_to_remove = [k for k in self._cache if k.startswith(prefix)]
+        for k in keys_to_remove:
+            del self._cache[k]
+
+
+# 缓存实例：认证 30s，额度 5s（额度扣减后需要较快失效）
+_auth_cache = _TTLCache(ttl=30.0)
+_quota_cache = _TTLCache(ttl=5.0)
+
 # 导入核心模块
 import sys
 import os
@@ -62,6 +100,7 @@ if _current_dir not in sys.path:
 
 from api_key_manager import get_api_key_manager, APIKeyManager
 from auth_manager import User as AuthUser
+from load_balancer import LBStrategy
 
 # 导入 Node WebSocket 管理器（用于内网穿透场景）
 try:
@@ -141,7 +180,7 @@ class CreateKeyRequest(BaseModel):
 
 async def verify_api_key(request: Request) -> Tuple[str, Optional[str]]:
     """
-    验证 API Key 或 Session Token
+    验证 API Key 或 Session Token（带 30s TTL 缓存）
 
     支持两种认证方式：
     1. Authorization: Bearer <api_key> - 用于外部 API 调用
@@ -150,7 +189,16 @@ async def verify_api_key(request: Request) -> Tuple[str, Optional[str]]:
     Returns:
         (token_string, user_id) - user_id 可用于额度管理
     """
+    # 构建缓存 key（基于请求头/cookie）
     auth_header = request.headers.get("Authorization", "")
+    session_token = request.cookies.get("session_token", "")
+    cache_key = f"auth:{auth_header}:{session_token}"
+
+    # 命中缓存直接返回
+    cached = _auth_cache.get(cache_key)
+    if cached:
+        return cached
+
     if auth_header.startswith("Bearer "):
         api_key = auth_header[7:].strip()
         if api_key:
@@ -160,15 +208,18 @@ async def verify_api_key(request: Request) -> Tuple[str, Optional[str]]:
                 key_info = key_manager._keys.get(api_key)
                 if key_info and key_info.get("user_id"):
                     user_id = key_info["user_id"]
-                return (api_key, user_id)
+                result = (api_key, user_id)
+                _auth_cache.set(cache_key, result)
+                return result
 
-    session_token = request.cookies.get("session_token", "")
     if session_token:
         from auth_manager import get_auth_manager
         auth_mgr = get_auth_manager()
         user = auth_mgr.validate_session(session_token)
         if user:
-            return (f"session:{user.id}", user.id)
+            result = (f"session:{user.id}", user.id)
+            _auth_cache.set(cache_key, result)
+            return result
 
     raise HTTPException(status_code=401, detail="Missing authentication")
 
@@ -246,6 +297,13 @@ def _get_manager():
         return None
 
 
+def _status_is_online(status) -> bool:
+    """安全获取节点在线状态（兼容 Enum 和字符串）"""
+    if hasattr(status, 'value'):
+        return status.value == "online"
+    return str(status) == "online"
+
+
 def _get_available_models_for_inference() -> List[Dict]:
     """获取所有可用于推理的已加载模型
 
@@ -276,7 +334,7 @@ def _get_available_models_for_inference() -> List[Dict]:
 
     # ── 第二步：收集所有已加载的模型列表 ──
     for node_id, connector in getattr(manager, 'connectors', {}).items():
-        if connector.node_info.status.value != "online":
+        if not _status_is_online(connector.node_info.status):
             continue
         for model in connector.node_info.loaded_models:
             model_id = model.get("model_id", "unknown")
@@ -334,44 +392,48 @@ def _find_target_node(model_id: str) -> Optional[tuple]:
         if lb:
             result = lb.select_instance(
                 model_id=model_id,
-                strategy="round_robin"
+                strategy=LBStrategy.ROUND_ROBIN
             )
             if result and result.selected_node_id:
                 node_id = result.selected_node_id
                 connector = manager.connectors.get(node_id)
-                if connector and connector.node_info.status.value == "online":
+                if connector:
                     node_url = connector.node_info.chatgpt_url
                     logger.info(f"[LoadBalancer] ✅ 选择节点: {node_id} (策略=round_robin, 实例={result.selected_instance.instance_id})")
                     return (node_id, node_url)
-                else:
-                    logger.warning(f"[LoadBalancer] ⚠️ 选择的节点 {node_id} 不可用，回退到默认逻辑")
         else:
             logger.warning("[LoadBalancer] ⚠️ 未找到 load_balancer 实例")
     except Exception as e:
         logger.error(f"[LoadBalancer] ❌ 负载均衡失败: {e}, 回退到默认逻辑")
 
-    candidate_nodes = []
-    first_layer_node = None
+    # Fallback: 遍历所有在线节点的已加载模型
+    candidate_nodes = []  # [(node_id, start_layer, url), ...]
+    first_layer_nodes = []  # 所有首层节点（多副本场景可能有多个）
 
     for node_id, connector in manager.connectors.items():
-        if connector.node_info.status.value != "online":
+        if not _status_is_online(connector.node_info.status):
             continue
         for m in connector.node_info.loaded_models:
-            if m.get("model_id") == model_id:
+            mid = m.get("model_id", "")
+            # 支持基础模型名匹配（如 qwen-3-0.6b 匹配 qwen-3-0.6b::worker-1）
+            if mid == model_id or mid.split('::')[0] == model_id:
                 shard = m.get("shard", {})
                 start_layer = shard.get("start_layer", -1)
-                is_first_layer = start_layer == 0
-                candidate_nodes.append((node_id, start_layer, connector.node_info.chatgpt_url))
+                is_first_layer = start_layer == 0 or (start_layer == -1)
+                url = connector.node_info.chatgpt_url
+                candidate_nodes.append((node_id, start_layer, url))
                 if is_first_layer:
-                    first_layer_node = node_id
+                    first_layer_nodes.append((node_id, url))
                 break
 
-    candidate_nodes.sort(key=lambda x: x[1])
-
-    if first_layer_node:
-        for node_id, _, url in candidate_nodes:
-            if node_id == first_layer_node:
-                return (node_id, url)
+    # 多副本负载均衡：在多个首层节点间轮询
+    if len(first_layer_nodes) > 1:
+        import random
+        node_id, url = random.choice(first_layer_nodes)  # 简单随机，可后续升级为轮询
+        logger.info(f"[LoadBalancer-Fallback] 🔄 多副本模式: {len(first_layer_nodes)} 个首层节点, 选择 {node_id}")
+        return (node_id, url)
+    elif first_layer_nodes:
+        return first_layer_nodes[0]
     elif candidate_nodes:
         return (candidate_nodes[0][0], candidate_nodes[0][2])
 
@@ -409,16 +471,28 @@ async def _proxy_to_node(
 
     node_id, node_url = target
     start_time = time.time()
-    
+
+    # 🔍 [诊断] 打印代理目标 URL（排查 ConnectTimeout）
+    logger.info(f"🔍 [Proxy-DIAG] 目标节点: {node_id}, URL: {node_url}")
+    _mgr = _get_manager()
+    if _mgr and node_id in _mgr.nodes:
+        _ni = _mgr.nodes[node_id]
+        logger.info(f"🔍 [Proxy-DIAG] 节点信息: address={_ni.address}, chatgpt_port={_ni.chatgpt_api_port}, chatgpt_url={_ni.chatgpt_url}")
+
     total_tokens_used = 0
     
     if _ws_available and node_ws_manager and node_ws_manager.is_node_connected(node_id):
         logger.info(f"[Proxy] 🌐 使用 WebSocket 隧道 → {node_id} req={request_id}")
-        
+
+        # 🔧 [修复] 节点端 WS 推理处理器期望 model_id 字段，补上
+        ws_request_data = dict(request_body)
+        if "model_id" not in ws_request_data and "model" in ws_request_data:
+            ws_request_data["model_id"] = ws_request_data["model"]
+
         try:
             async for chunk in await node_ws_manager.send_inference_request(
                 node_id=node_id,
-                request_data=request_body,
+                request_data=ws_request_data,
                 timeout=300.0
             ):
                 yield chunk
@@ -508,6 +582,16 @@ async def _proxy_to_node(
     client = _get_http_client()
     total_tokens_used = 0
 
+    # 🔧 [修复] 当 chatgpt_url 指向不可达地址（如 FRP 远程 IP）时，
+    #     自动 fallback 到本地 127.0.0.1（Manager 与节点同机部署场景）
+    _mgr_local = _get_manager()
+    _local_endpoint = None
+    if _mgr_local and node_id in _mgr_local.nodes:
+        _ni = _mgr_local.nodes[node_id]
+        if _ni.address not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            _local_endpoint = f"http://127.0.0.1:{_ni.chatgpt_api_port}/v1/chat/completions"
+            logger.info(f"🔧 [Proxy] 检测到远程地址，准备 fallback: {node_endpoint} → {_local_endpoint}")
+
     try:
         async with client.stream(
             "POST",
@@ -578,7 +662,94 @@ async def _proxy_to_node(
                     except Exception:
                         pass
 
-    except httpx.ConnectError as e:
+            # HTTP 路径：流式结束后扣减额度（之前只有 WS 路径有扣减，HTTP 路径缺失）
+            latency_ms = (time.time() - start_time) * 1000
+            manager = _get_manager()
+            if manager and hasattr(manager, 'load_balancer'):
+                manager.load_balancer.record_completion(
+                    node_id=node_id,
+                    model_id=model_id,
+                    success=True,
+                    latency=latency_ms,
+                    tokens_generated=total_tokens_used
+                )
+                logger.info(f"[LoadBalancer] 📊 [HTTP] 记录统计: {node_id} 延迟={latency_ms:.1f}ms tokens={total_tokens_used}")
+
+            if user_id and total_tokens_used > 0:
+                asyncio.create_task(_async_deduct_quota(user_id, total_tokens_used + 100, model_id))
+                input_tokens_est = sum(
+                    len((m.get("content", "") or "").split()) * 1.3
+                    for m in request_body.get("messages", [])
+                )
+                asyncio.create_task(_record_api_call_stats(
+                    user_id=user_id,
+                    api_key=api_key,
+                    model_id=model_id,
+                    endpoint="chat/completions",
+                    input_tokens=int(input_tokens_est),
+                    output_tokens=total_tokens_used,
+                    total_tokens=total_tokens_used + int(input_tokens_est),
+                    latency_ms=latency_ms,
+                    status="success",
+                    error_message="",
+                    request_id=request_id
+                ))
+
+            logger.info(f"[Proxy] ← HTTP 完成 req={request_id} tokens≈{total_tokens_used} user={user_id}")
+            return
+
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        # 🔧 [修复] 远程地址不可达时，fallback 到本地 127.0.0.1
+        if _local_endpoint:
+            logger.warning(f"🔧 [Proxy] 远程地址 {node_endpoint} 连接失败，尝试 fallback 本地: {_local_endpoint}")
+            try:
+                async with client.stream(
+                    "POST",
+                    _local_endpoint,
+                    json=request_body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                    },
+                ) as local_response:
+                    if local_response.status_code != 200:
+                        error_text = await local_response.aread()
+                        logger.error(f"[Proxy] 本地节点返回错误 {local_response.status_code}: {error_text[:200]}")
+                        error_data = {
+                            "error": {"message": f"Local node error ({local_response.status_code}): {error_text[:200].decode('utf-8', errors='replace')}", "type": "upstream_error"}
+                        }
+                        yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n".encode('utf-8')
+                        yield b"data: [DONE]\n\n"
+                        return
+
+                    async for chunk in local_response.aiter_bytes(chunk_size=4096):
+                        if chunk:
+                            yield chunk
+                            try:
+                                text = chunk.decode('utf-8', errors='ignore')
+                                for line in text.split('\n'):
+                                    if line.startswith('data: ') and '[DONE]' not in line:
+                                        try:
+                                            data = json.loads(line[6:])
+                                            choices = data.get('choices', [])
+                                            if choices:
+                                                delta = choices[0].get('delta', {}).get('content', '')
+                                                if delta:
+                                                    total_tokens_used += len(delta) // 4
+                                        except (json.JSONDecodeError, KeyError, IndexError):
+                                            pass
+                            except Exception:
+                                pass
+
+                    # HTTP fallback 本地路径：流式结束后扣减额度
+                    if user_id and total_tokens_used > 0:
+                        asyncio.create_task(_async_deduct_quota(user_id, total_tokens_used + 100, model_id))
+                    logger.info(f"🔧 [Proxy] ✅ Fallback 本地成功! req={request_id} tokens≈{total_tokens_used} user={user_id}")
+                    return
+
+            except Exception as local_e:
+                logger.error(f"🔧 [Proxy] Fallback 本地也失败: {local_e}")
+
         logger.error(f"[Proxy] 无法连接节点 {node_id}: {e}")
 
         manager = _get_manager()
@@ -716,13 +887,16 @@ async def _proxy_to_node(
 
 async def _async_deduct_quota(user_id: str, tokens: int, model_id: str):
     """异步扣减额度（不阻塞主流程）"""
+    logger.info(f"[Quota] ⏳ 准备扣减: user={user_id} tokens={tokens} model={model_id}")
     try:
         from quota_manager import get_quota_manager
         quota_mgr = get_quota_manager()
-        quota_mgr.deduct_tokens(user_id, tokens, model_id, "inference")
-        logger.info(f"[Quota] 异步扣减: user={user_id} tokens={tokens} model={model_id}")
+        allowed, remaining = quota_mgr.deduct_tokens(user_id, tokens, model_id, "inference")
+        # 扣减后失效该用户所有额度缓存，确保下次查询拿到最新数据
+        _quota_cache.invalidate_prefix(f"quota:{user_id}:")
+        logger.info(f"[Quota] ✅ 扣减完成: user={user_id} tokens={tokens} 剩余={remaining} allowed={allowed}")
     except Exception as e:
-        logger.warning(f"[Quota] 异步扣减失败: {e}")
+        logger.error(f"[Quota] ❌ 扣减失败: user={user_id} error={e}", exc_info=True)
 
 
 async def _record_api_call_stats(
@@ -784,12 +958,14 @@ async def chat_completions(
           -H "Content-Type: application/json" \\
           -d '{"model": "qwen-3-0.6b", "messages": [{"role": "user", "content": "你好"}], "stream": true}'
     """
+
     api_key, user_id = auth_info
+    logger.info(f"[Chat] 📥 新请求: model={request.model} user={user_id} stream={request.stream}")
     manager = _get_manager()
     if not manager:
         raise HTTPException(status_code=503, detail="Cluster manager not initialized")
 
-    # 额度检查
+    # 额度检查（带 5s TTL 缓存，避免每次请求查 SQLite）
     from quota_manager import get_quota_manager
     quota_mgr = get_quota_manager()
 
@@ -799,7 +975,16 @@ async def chat_completions(
     estimated_tokens = int(estimated_tokens) + 100
 
     if user_id:
-        allowed, msg, remaining = quota_mgr.check_quota(user_id, estimated_tokens)
+        quota_cache_key = f"quota:{user_id}:{estimated_tokens}"
+        cached_quota = _quota_cache.get(quota_cache_key)
+        if cached_quota is not None:
+            # 缓存命中：直接用缓存结果
+            allowed, msg, remaining = cached_quota
+        else:
+            # 缓存未命中：查 SQLite
+            allowed, msg, remaining = quota_mgr.check_quota(user_id, estimated_tokens)
+            _quota_cache.set(quota_cache_key, (allowed, msg, remaining))
+
         if not allowed:
             raise HTTPException(
                 status_code=402,
@@ -810,20 +995,21 @@ async def chat_completions(
                 }
             )
 
-    # 检查模型可用性
+    # 检查模型可用性（支持基础模型名匹配，如 qwen-3-0.6b 匹配 qwen-3-0.6b::worker-1）
     available_models = _get_available_models_for_inference()
     available_ids = [m["model_id"] for m in available_models]
+    available_base_ids = [mid.split('::')[0] for mid in available_ids]
     model_id = request.model
 
-    if model_id not in available_ids:
+    if model_id not in available_ids and model_id not in available_base_ids:
         raise HTTPException(
             status_code=400,
             detail=f"Model '{model_id}' is not loaded. Available: {available_ids}"
         )
 
-    # 检查 API Key 模型权限
+    # 检查 API Key 模型权限（session 认证用户跳过此检查）
     key_manager = get_api_key_manager()
-    if not key_manager.check_model_access(api_key, model_id):
+    if not api_key.startswith("session:") and not key_manager.check_model_access(api_key, model_id):
         raise HTTPException(status_code=403, detail="API key does not have access to this model")
 
     # 构建转发请求体（保持 OpenAI 格式）
@@ -863,16 +1049,17 @@ async def completions(
 
     available_models = _get_available_models_for_inference()
     available_ids = [m["model_id"] for m in available_models]
+    available_base_ids = [mid.split('::')[0] for mid in available_ids]
     model_id = request.model
 
-    if model_id not in available_ids:
+    if model_id not in available_ids and model_id not in available_base_ids:
         raise HTTPException(
             status_code=400,
             detail=f"Model '{model_id}' is not loaded. Available: {available_ids}"
         )
 
     key_manager = get_api_key_manager()
-    if not key_manager.check_model_access(api_key, model_id):
+    if not api_key.startswith("session:") and not key_manager.check_model_access(api_key, model_id):
         raise HTTPException(status_code=403, detail="API key does not have access to this model")
 
     prompt = request.prompt

@@ -634,7 +634,7 @@
                 if (res.ok && data.success) {
                     showAlert('登录成功！正在跳转...', 'success');
                     setTimeout(() => {
-                        window.location.href = '/';
+                        window.location.href = '/admin/dashboard';
                     }, 800);
                 } else {
                     showAlert(data.detail || '登录失败，请检查账号密码');
@@ -652,7 +652,11 @@
             try {
                 const res = await fetch('/me');
                 if (res.ok) {
-                    window.location.href = '/';
+                    const data = await res.json();
+                    if (data.data?.role === 'admin') {
+                        window.location.href = '/admin/dashboard';
+                    }
+                    // 非管理员不跳转，留在当前页显示登录表单
                 }
             } catch (e) {}
         }

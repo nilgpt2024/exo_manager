@@ -195,11 +195,22 @@ class P2PTopologyManager:
             包含节点和边信息的字典
         """
         current_time = time.time()
-        
+
         # 如果不是强制且距离上次收集时间很短，返回缓存
         if not force and (current_time - self.last_collection_time) < self.collection_interval / 2:
             if self.nodes and self.edges:
                 return self.get_topology_summary()
+
+        # 单节点时跳过拓扑收集（没有 P2P 边可发现）
+        online_nodes = [
+            c for c in self.manager.connectors.values()
+            if c.node_info.status.value == 'online'
+        ]
+        if len(online_nodes) <= 1:
+            # 仍需保证基础拓扑数据存在（供 API 查询使用）
+            if not self.nodes:
+                self._build_basic_topology()
+            return self.get_topology_summary()
         
         logger.info(f"🗺️ 开始收集P2P拓扑... (当前已知 {len(self.nodes)} 个节点)")
         
