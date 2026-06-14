@@ -958,6 +958,39 @@
             color: #1e293b;
             margin-bottom: 0.15rem;
         }
+
+        /* 设备名称编辑行 */
+        .node-tab-name-row {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            margin-bottom: 0.15rem;
+            color: #1e293b;
+            font-weight: 600;
+            font-size: 0.88rem;
+        }
+        .node-tab-label-input {
+            flex: 1;
+            min-width: 80px;
+            padding: 2px 6px;
+            border: 1px solid transparent;
+            border-radius: 5px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: #1e293b;
+            background: transparent;
+            transition: all 0.2s;
+        }
+        .node-tab-label-input:hover {
+            border-color: #cbd5e1;
+            background: white;
+        }
+        .node-tab-label-input:focus {
+            outline: none;
+            border-color: var(--user-primary);
+            background: white;
+            box-shadow: 0 0 0 2px rgba(59,130,246,0.12);
+        }
         .node-tab-id {
             font-size: 0.76rem;
             color: #64748b;
@@ -2150,17 +2183,25 @@ function saveMyNodes() {
 function addNode() {
     var idx = myNodes.length;
     var baseId = connectData ? connectData.node_id : 'node';
-    // 不同设备上端口默认都是 50051（每台设备独立），只有同机多节点才需改端口
-    var newId = idx === 0 ? baseId : baseId + '-dev' + (idx);
+
+    // ---- node-id: 每台设备必须唯一 ----
+    // 第 1 台: node_38f5c62c
+    // 第 2 台+: node_38f5c62c + _a1, _a2 ... (简洁短后缀)
+    var newId = idx === 0 ? baseId : baseId + '_a' + idx;
+
+    // ---- label: 给人看的设备名，可编辑 ----
+    var defaultNames = ['我的设备', '工作站', '服务器', '笔记本', 'GPU 机器'];
+    var label = defaultNames[idx] || ('设备 ' + (idx + 1));
+
     myNodes.push({
         node_id: newId,
-        local_port: 50051,   // 默认统一端口，不同设备互不冲突
-        label: '设备 ' + (idx + 1)
+        local_port: 50051,
+        label: label
     });
     saveMyNodes();
     renderNodeTabs();
     selectNode(idx);
-    showToast('已添加节点: ' + newId + ' (端口 50051)');
+    showToast('已添加: ' + label);
 }
 
 function removeNode(index) {
@@ -2205,8 +2246,11 @@ function renderNodeTabs() {
         var isActive = i === selectedNodeIndex;
         html +=
             '<div class="node-tab' + (isActive ? ' active' : '') + '" onclick="selectNode(' + i + ')">' +
-                '<div class="node-tab-name">' +
-                    '<i class="fas fa-desktop"></i> ' + escapeHtml(n.label) +
+                '<div class="node-tab-name-row">' +
+                    '<i class="fas fa-desktop"></i> ' +
+                    '<input type="text" class="node-tab-label-input" value="' + escapeHtml(n.label) + '"' +
+                    ' onclick="event.stopPropagation()" onchange="changeNodeLabel(' + i + ', this.value)"' +
+                    ' placeholder="设备名称" title="编辑设备名称（仅用于显示区分）">' +
                 '</div>' +
                 '<div class="node-tab-id">' + escapeHtml(n.node_id) + '</div>' +
                 '<div class="node-tab-port-row">' +
@@ -2217,7 +2261,7 @@ function renderNodeTabs() {
                     ' title="同一台设备运行多个节点时修改为不同端口（如 50052）">' +
                 '</div>' +
                 (myNodes.length > 1 ?
-                    '<button class="node-tab-remove" onclick="event.stopPropagation();removeNode(' + i + ')" title="移除此节点">' +
+                    '<button class="node-tab-remove" onclick="event.stopPropagation();removeNode(' + i + ')" title="移除此设备">' +
                         '<i class="fas fa-times"></i></button>'
                     : '') +
             '</div>';
@@ -2236,10 +2280,18 @@ function changeNodePort(index, value) {
     }
     myNodes[index].local_port = port;
     saveMyNodes();
-    // 如果是当前选中节点，立即更新命令
     if (index === selectedNodeIndex) {
         updateCommandForSelectedNode();
     }
+}
+
+function changeNodeLabel(index, value) {
+    var label = value.trim();
+    if (!label) { showToast('设备名称不能为空'); return; }
+    myNodes[index].label = label;
+    saveMyNodes();
+    // 更新 tab 显示
+    renderNodeTabs();
 }
 
 function updateCommandForSelectedNode() {

@@ -1445,6 +1445,7 @@
                     <thead>
                         <tr>
                             <th>节点ID</th>
+                            <th>所属用户</th>
                             <th>地址</th>
                             <th>设备</th>
                             <th>内存 (GB)</th>
@@ -1456,7 +1457,7 @@
                     </thead>
                     <tbody id="nodesTableBody">
                         <tr>
-                            <td colspan="8" class="text-center">
+                            <td colspan="9" class="text-center">
                                 <div class="loading-spinner"></div>
                                 <p class="mt-4">正在加载节点数据...</p>
                             </td>
@@ -2957,7 +2958,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             if (!nodes || nodes.length === 0) {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="8">
+                        <td colspan="9">
                             <div class="empty-state" style="padding: 3rem 2rem;">
                                 <i class="fas fa-rocket" style="font-size: 4rem; opacity: 0.4; margin-bottom: 1rem; background: linear-gradient(135deg, #667eea, #764ba2); -webkit-background-clip: text; -webkit-text-fill-color: transparent;"></i>
                                 <h3 style="color: var(--gray-800); margin-bottom: 0.5rem;">欢迎使用 EXO Cluster Manager! 🎉</h3>
@@ -3053,6 +3054,21 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 return `
                 <tr>
                     <td><strong>${escapeHtml(node.node_id)}</strong></td>
+                    <td>${
+                        (function() {
+                            const owner = node.owner_user;
+                            if (!owner) {
+                                return '<span style="color: var(--gray-400);">-</span>';
+                            }
+                            const roleBadge = owner.role === 'admin'
+                                ? '<span class="badge" style="font-size:0.65rem;background:#ede9fe;color:#7c3aed;margin-left:4px;">Admin</span>'
+                                : '';
+                            return `<span style="white-space:nowrap;">
+                                <i class="fas fa-user-circle" style="color: var(--primary); margin-right: 3px;"></i>
+                                ${escapeHtml(owner.nickname || '未知')}${roleBadge}
+                            </span>`;
+                        })()
+                    }</td>
                     <td><code>${escapeHtml(node.address)}:${node.port}</code></td>
                     <td>${escapeHtml(node.device_info?.chip || 'N/A')}</td>
                     <td>${((node.device_info?.memory || 0) / 1024).toFixed(1)} GB</td>

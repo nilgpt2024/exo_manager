@@ -911,18 +911,51 @@ async def shutdown_event():
 async def list_nodes():
     """
     获取所有节点列表
-    
-    返回所有已注册的节点及其基本状态信息
+
+    返回所有已注册的节点及其基本状态信息，包含所属用户映射
     """
     if not manager:
         raise HTTPException(status_code=503, detail="服务未初始化")
-    
+
     status = manager.get_cluster_status()
-    
+    nodes = status["nodes"]
+
+    # ---- 匹配节点 → 所属用户 ----
+    # node_id 格式: node_{user_id前8位}，如 node_38f5c62c → 用户 id 含 38f5c62c
+    try:
+        from auth_manager import get_auth_manager
+        auth_mgr = get_auth_manager()
+        users_list = auth_mgr.list_users()  # [{id, nickname, ...}]
+        # 构建 id_prefix -> user 映射（取每个用户 id 的前 8 位）
+        user_map = {}  # prefix -> {id, nickname, role}
+        for u in users_list:
+            prefix = str(u.get("id", ""))[:8]
+            if prefix:
+                user_map[prefix] = u
+    except Exception:
+        user_map = {}
+
+    for node in nodes:
+        nid = node.get("node_id", "")
+        # node_38f5c62c → 提取 38f5c62c
+        if nid.startswith("node_"):
+            prefix = nid[5:13]  # 取 "node_" 后 8 位
+            owner = user_map.get(prefix)
+            if owner:
+                node["owner_user"] = {
+                    "id": owner.get("id"),
+                    "nickname": owner.get("nickname", "未知用户"),
+                    "role": owner.get("role", "user"),
+                }
+            else:
+                node["owner_user"] = None
+        else:
+            node["owner_user"] = None
+
     return {
         "success": True,
-        "data": status["nodes"],
-        "total": len(status["nodes"]),
+        "data": nodes,
+        "total": len(nodes),
         "timestamp": status["last_update"]
     }
 
@@ -1721,12 +1754,16 @@ async def websocket_monitor(websocket: WebSocket):
     """
     await websocket.accept()
     logger.info(f"🔗 [WS Monitor] 客户端已连接 (V2 格式)")
-    
+
     try:
         while True:
             # 每5秒推送一次统计数据
             await asyncio.sleep(5)
-            
+
+            # 检查连接是否仍然有效（客户端可能已断开）
+            if websocket.client_state.name != "CONNECTED":
+                break
+
             try:
                 # 构建与 /api/ws/status 完全一致的 V2 格式数据
                 node_connections = {
@@ -1736,39 +1773,48 @@ async def websocket_monitor(websocket: WebSocket):
                     }
                     for node_id, ws in node_ws_manager.node_connections.items()
                 }
-                
+
                 pending_stats = {
                     "total": len(node_ws_manager.pending_requests),
                     "requests": list(node_ws_manager.pending_requests.keys())[:20]
                 }
-                
+
                 health_results = await node_ws_manager.health_check_all_nodes()
-                
+
                 monitor_data = {
                     "timestamp": time.time(),
-                    "node_connections": node_connections,  # ✅ 对象格式
-                    "pending_requests": pending_stats,      # ✅ 对象格式
+                    "node_connections": node_connections,
+                    "pending_requests": pending_stats,
                     "health_check": health_results,
                     "total_nodes_connected": len(node_ws_manager.node_connections),
-                    "version": "2.0"  # 标记为 V2 版本
-                }
-                
-                await websocket.send_text(json.dumps(monitor_data))
-                
-            except Exception as e:
-                logger.error(f"[WS Monitor] ❌ 构建监控数据失败: {e}")
-                # 发送错误状态但不中断连接
-                error_data = {
-                    "timestamp": time.time(),
-                    "error": str(e),
                     "version": "2.0"
                 }
-                await websocket.send_text(json.dumps(error_data))
-            
+
+                await websocket.send_text(json.dumps(monitor_data))
+
+            except Exception as e:
+                err_msg = str(e)
+                # 忽略已关闭连接的发送错误（正常断开场景）
+                if "close" in err_msg.lower() or "send" in err_msg.lower():
+                    break
+                logger.error(f"[WS Monitor] ❌ 构建监控数据失败: {e}")
+                # 尝试发送错误状态，忽略发送失败
+                try:
+                    error_data = {
+                        "timestamp": time.time(),
+                        "error": str(e),
+                        "version": "2.0"
+                    }
+                    await websocket.send_text(json.dumps(error_data))
+                except Exception:
+                    break
+
     except WebSocketDisconnect:
         logger.info(f"🔌 [WS Monitor] 客户端断开")
     except Exception as e:
-        logger.error(f"[WS Monitor] ❌ 错误: {e}")
+        err_msg = str(e)
+        if "close" not in err_msg.lower() and "send" not in err_msg.lower():
+            logger.error(f"[WS Monitor] ❌ 错误: {e}")
 
 
 @app.get("/api/ws/node/{node_id}/stats", response_model=Dict)
@@ -3556,7 +3602,69 @@ class NodeWSManager:
                     except Exception as e:
                         logger.debug(f"广播状态变化失败: {e}")
 
+            # 📢 广播新节点信息给其他已连接节点（用于 P2P 发现）
+            await self.broadcast_new_node_to_peers(node_id)
+
             return True
+
+    async def broadcast_new_node_to_peers(self, node_id: str):
+        """将新上线节点信息广播给其他已连接节点（用于 P2P 发现）"""
+        if len(self.node_connections) <= 1:
+            return  # 只有自己，无需广播
+
+        try:
+            from frp_server_manager import get_frp_server_manager
+            frp_mgr = get_frp_server_manager()
+
+            # 构建新节点信息
+            new_node_info = None
+            if manager and node_id in manager.nodes:
+                ni = manager.nodes[node_id]
+                client_cfg = frp_mgr.get_client_config(node_id)
+                frp_remote_port = 0
+                if client_cfg:
+                    meta = client_cfg.get("_meta", {})
+                    frp_remote_port = meta.get("remote_port", 0)
+
+                peer_port = frp_remote_port if frp_remote_port > 0 else ni.port
+
+                new_node_info = {
+                    "node_id": node_id,
+                    "address": ni.ip,
+                    "port": peer_port,
+                    "device_capabilities": {
+                        "model": ni.device_name or "unknown",
+                        "chip": ni.device_name or "unknown",
+                        "memory": ni.gpu_total_memory_mb / 1024 if ni.gpu_total_memory_mb else 0,
+                    },
+                }
+
+            if not new_node_info:
+                return
+
+            # 广播给所有其他已连接节点
+            msg = {
+                "type": "peer_list",
+                "peers": [new_node_info],
+                "timestamp": time.time(),
+            }
+            msg_text = json.dumps(msg)
+
+            sent_count = 0
+            for other_id, other_ws in self.node_connections.items():
+                if other_id == node_id:
+                    continue
+                try:
+                    await other_ws.send_text(msg_text)
+                    sent_count += 1
+                except Exception as e:
+                    logger.debug(f"[NodeWS] 向 {other_id} 广播新节点失败: {e}")
+
+            if sent_count > 0:
+                logger.info(f"📢 [NodeWS] 已向 {sent_count} 个节点广播新节点: {node_id}")
+
+        except Exception as e:
+            logger.debug(f"[NodeWS] ⚠️ 广播新节点失败（非关键）: {e}")
     
     async def disconnect_node(self, node_id: str):
         """Node 断开连接（幂等操作，支持重复调用）"""
@@ -4290,11 +4398,71 @@ async def websocket_node_connection(websocket: WebSocket, node_id: str):
     - 保持连接接收推理请求
     """
     await websocket.accept()
-    
+
     # 注册节点连接
     await node_ws_manager.connect_node(node_id, websocket)
-    
+
     logger.info(f"🔗 [NodeWS] 节点 {node_id} 已连接，等待消息...")
+
+    # 📢 推送已在线节点列表给新连接的节点（用于 FRP P2P 发现）
+    try:
+        from frp_server_manager import get_frp_server_manager
+        frp_mgr = get_frp_server_manager()
+
+        # 收集所有其他已连接节点的信息（排除自己）
+        online_peers = []
+        for other_id, other_ws in node_ws_manager.node_connections.items():
+            if other_id == node_id:
+                continue
+
+            # 获取该节点的 FRP 远程端口（用于 P2P 连接）
+            frp_remote_port = 0
+            client_cfg = frp_mgr.get_client_config(other_id)
+            if client_cfg:
+                meta = client_cfg.get("_meta", {})
+                frp_remote_port = meta.get("remote_port", 0)
+
+            # 获取节点详细信息
+            peer_addr = ""
+            peer_port = 0
+            device_caps = {}
+
+            if manager and other_id in manager.nodes:
+                ni = manager.nodes[other_id]
+                # 优先使用 FRP 远程端口（FRPDiscovery.add_known_node 会自动转为 P2P 地址）
+                if frp_remote_port > 0:
+                    peer_addr = ni.ip  # 原始地址，FRPDiscovery 会转换
+                    peer_port = frp_remote_port
+                else:
+                    peer_addr = ni.ip
+                    peer_port = ni.port
+
+                device_caps = {
+                    "model": ni.device_name or "unknown",
+                    "chip": ni.device_name or "unknown",
+                    "memory": ni.gpu_total_memory_mb / 1024 if ni.gpu_total_memory_mb else 0,
+                }
+
+            if not peer_addr or peer_port <= 0:
+                continue
+
+            online_peers.append({
+                "node_id": other_id,
+                "address": str(peer_addr),
+                "port": int(peer_port),
+                "device_capabilities": device_caps,
+            })
+
+        if online_peers:
+            peer_list_msg = {
+                "type": "peer_list",
+                "peers": online_peers,
+                "timestamp": time.time(),
+            }
+            await websocket.send_text(json.dumps(peer_list_msg))
+            logger.info(f"📢 [NodeWS] 已向 {node_id} 推送 {len(online_peers)} 个在线节点")
+    except Exception as e:
+        logger.debug(f"[NodeWS] ⚠️ 推送节点列表失败（非关键）: {e}")
     
     try:
         # 保持连接，处理 Node 发来的消息
