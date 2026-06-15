@@ -230,7 +230,7 @@ async def install_frp():
 @router.get("/download-info")
 async def get_download_info():
     """获取 FRP 下载信息（版本、链接等）"""
-    from exo.networking.frp.frp_downloader import get_system_info
+    from frp_helper import get_system_info
     system, arch = get_system_info()
     filename = f"frp_{FRP_VERSION}_{system}_{arch}"
     filename += ".zip" if system == "windows" else ".tar.gz"

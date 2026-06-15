@@ -76,11 +76,6 @@ _current_dir = os.path.dirname(os.path.abspath(__file__))
 if _current_dir not in sys.path:
     sys.path.insert(0, _current_dir)
 
-# 同时添加父目录（用于导入exo主项目的模块）
-_parent_dir = os.path.dirname(_current_dir)
-if _parent_dir not in sys.path:
-    sys.path.insert(0, _parent_dir)
-
 from cluster_core import (
     EXOClusterManager,
     NodeConnector,

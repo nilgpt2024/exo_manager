@@ -70,14 +70,15 @@ try:
 except ImportError:
     np = None
 
-# 确保当前文件所在目录和父目录都在sys.path中（支持 -m 模式和直接运行）
+# 确保当前文件所在目录在sys.path中（支持 -m 模式和直接运行）
 _current_dir = os.path.dirname(os.path.abspath(__file__))
 if _current_dir not in sys.path:
     sys.path.insert(0, _current_dir)
 
-_parent_dir = os.path.dirname(_current_dir)
-if _parent_dir not in sys.path:
-    sys.path.insert(0, _parent_dir)
+# 确保本地 gRPC proto 目录在 sys.path 中
+_grpc_dir = os.path.join(_current_dir, 'grpc')
+if _grpc_dir not in sys.path:
+    sys.path.insert(0, _grpc_dir)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -165,7 +166,6 @@ class NodeConnector:
             
             # 尝试导入gRPC stub
             try:
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
                 from node_service_pb2_grpc import NodeServiceStub
                 from node_service_pb2 import CollectTopologyRequest
                 self.stub = NodeServiceStub(self.channel)
@@ -207,7 +207,6 @@ class NodeConnector:
         
         try:
             import sys
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
             from node_service_pb2 import CollectTopologyRequest
             
             request = CollectTopologyRequest(max_depth=0, visited=[])
@@ -321,7 +320,6 @@ class NodeConnector:
         
         try:
             import sys
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
             from node_service_pb2 import CollectTopologyRequest
             
             request = CollectTopologyRequest(max_depth=0, visited=[])
@@ -515,9 +513,6 @@ class NodeConnector:
             
             # 使用正确的 protobuf 请求类型
             try:
-                import sys
-                import os
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
                 from node_service_pb2 import HealthCheckRequest
                 request = HealthCheckRequest()
             except ImportError:
@@ -634,8 +629,6 @@ class NodeConnector:
         """通过 gRPC SendOpaqueStatus 发送分片配置"""
         try:
             import sys
-            import os
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
             from node_service_pb2 import SendOpaqueStatusRequest
             
             shard_config = json.dumps({
@@ -750,8 +743,6 @@ class NodeConnector:
 
         try:
             import sys
-            import os
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
             from node_service_pb2 import SendOpaqueStatusRequest
 
             unload_command = json.dumps({

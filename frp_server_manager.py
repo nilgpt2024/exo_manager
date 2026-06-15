@@ -33,9 +33,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Any
 from enum import Enum
 
-# 复用 exo 的 FRP 下载工具
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from exo.networking.frp.frp_downloader import (
+# 使用本地的 FRP 下载工具（独立于 exo 主项目）
+from frp_helper import (
     FRP_VERSION,
     FRP_BASE_URL,
     download_and_install_frp,

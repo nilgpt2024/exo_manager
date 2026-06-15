@@ -283,7 +283,6 @@ class P2PTopologyManager:
             
             # 导入正确的 protobuf 消息类型
             try:
-                sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
                 from node_service_pb2 import CollectTopologyRequest
             except ImportError:
                 logger.debug(f"无法导入 CollectTopologyRequest protobuf 类型")
@@ -341,7 +340,6 @@ class P2PTopologyManager:
             # 发送请求（如果支持的话）
             if hasattr(connector.stub, 'SendOpaqueStatus'):
                 try:
-                    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'exo', 'networking', 'grpc'))
                     from node_service_pb2 import OpaqueStatusRequest
                     
                     request = OpaqueStatusRequest(

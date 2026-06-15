@@ -7699,6 +7699,9 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
 
                     // 更新分类下拉选项
                     updateCategoryOptions(result.data.categories);
+                } else {
+                    console.warn('[Logs] API 返回非成功状态:', result);
+                    renderLogs([]);
                 }
             } catch (e) {
                 console.error('[Logs] 获取失败:', e);
@@ -7737,7 +7740,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                         .join(' ');
                     detailHtml = `<div style="color:#8b949e;font-size:0.76rem;margin-left:2.5em;
                                        margin-top:-4px;padding-bottom:6px;border-bottom:1px solid #21262d;">
-                                        ${detailHtml}</div>`;
+                                        ${detailStr}</div>`;
                 }
 
                 // 新日志高亮动画
