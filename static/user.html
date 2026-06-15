@@ -566,6 +566,148 @@
         /* 页面: 使用统计 */
         .page-stats { padding: 2rem; overflow-y: auto; }
 
+        /* 页面: 账户设置 */
+        .page-settings { padding: 2rem; overflow-y: auto; max-width: 800px; margin: 0 auto; }
+
+        .settings-header {
+            margin-bottom: 1.5rem;
+        }
+
+        .settings-header h2 {
+            font-size: 1.35rem;
+            margin-bottom: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .settings-header p {
+            color: #64748b;
+            font-size: 0.9rem;
+        }
+
+        .settings-card {
+            background: white;
+            border: 1px solid var(--user-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .settings-card h3 {
+            font-size: 1.05rem;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--user-text);
+        }
+
+        .form-group-settings {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-label-settings {
+            display: block;
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: #475569;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input-settings {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid var(--user-border);
+            border-radius: 10px;
+            font-size: 0.92rem;
+            color: var(--user-text);
+            transition: all 0.2s;
+            background: #f8fafc;
+        }
+
+        .form-input-settings:focus {
+            outline: none;
+            border-color: var(--user-primary);
+            background: white;
+            box-shadow: 0 0 0 3px rgba(13,148,140,0.1);
+        }
+
+        .password-input-wrapper {
+            position: relative;
+        }
+
+        .toggle-password-btn {
+            position: absolute;
+            right: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0.25rem;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+
+        .toggle-password-btn:hover { color: var(--user-primary); }
+
+        .password-hint {
+            font-size: 0.78rem;
+            color: #94a3b8;
+            margin-top: 0.4rem;
+            line-height: 1.5;
+        }
+
+        .btn-settings-primary {
+            padding: 0.75rem 1.75rem;
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-settings-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-settings-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .alert-settings {
+            padding: 0.85rem 1rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            font-size: 0.88rem;
+            display: none;
+            align-items: center;
+            gap: 0.65rem;
+        }
+
+        .alert-settings.show { display: flex; }
+        .alert-settings-error {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+        .alert-settings-success {
+            background: #f0fdf4;
+            color: #16a34a;
+            border: 1px solid #bbf7d0;
+        }
+
         .stats-header {
             margin-bottom: 1.5rem;
         }
@@ -1371,6 +1513,9 @@
         <button class="nav-item" onclick="switchPage('connect')">
             <i class="fas fa-plug"></i> 节点连接
         </button>
+        <button class="nav-item" onclick="switchPage('settings')">
+            <i class="fas fa-gear"></i> 账户设置
+        </button>
     </nav>
 
     <div class="sidebar-footer">
@@ -1707,6 +1852,89 @@
         </div>
     </div>
 
+    <!-- ====== 账户设置页面 ====== -->
+    <div id="pageSettings" class="page-settings page-hidden">
+        <div class="settings-header">
+            <h2><i class="fas fa-gear"></i> 账户设置</h2>
+            <p>管理您的账户信息和安全设置</p>
+        </div>
+
+        <!-- 修改密码卡片 -->
+        <div class="settings-card">
+            <h3><i class="fas fa-lock"></i> 修改密码</h3>
+
+            <div id="passwordAlert" class="alert-settings"></div>
+
+            <form id="changePasswordForm" onsubmit="handleChangePassword(event)">
+                <div class="form-group-settings">
+                    <label class="form-label-settings" for="oldPassword">当前密码</label>
+                    <div class="password-input-wrapper">
+                        <input type="password" id="oldPassword" class="form-input-settings"
+                               placeholder="请输入当前密码" required autocomplete="current-password">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('oldPassword', this)">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group-settings">
+                    <label class="form-label-settings" for="newPassword">新密码</label>
+                    <div class="password-input-wrapper">
+                        <input type="password" id="newPassword" class="form-input-settings"
+                               placeholder="请输入新密码" required autocomplete="new-password"
+                               oninput="validatePasswordStrength(this.value)">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('newPassword', this)">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                    <div class="password-hint" id="passwordHint">
+                        密码至少 8 位，需包含大小写字母、数字和特殊字符
+                    </div>
+                    <div id="passwordStrength" style="margin-top: 0.5rem; display: none;">
+                        <div style="height: 4px; background: #e2e8f0; border-radius: 2px; overflow: hidden;">
+                            <div id="strengthBar" style="height: 100%; width: 0%; transition: all 0.3s; border-radius: 2px;"></div>
+                        </div>
+                        <div id="strengthText" style="font-size: 0.75rem; margin-top: 0.3rem; color: #94a3b8;"></div>
+                    </div>
+                </div>
+
+                <div class="form-group-settings">
+                    <label class="form-label-settings" for="confirmPassword">确认新密码</label>
+                    <div class="password-input-wrapper">
+                        <input type="password" id="confirmPassword" class="form-input-settings"
+                               placeholder="请再次输入新密码" required autocomplete="new-password">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('confirmPassword', this)">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn-settings-primary" id="changePasswordBtn">
+                    <i class="fas fa-key"></i> 修改密码
+                </button>
+            </form>
+        </div>
+
+        <!-- 安全信息卡片 -->
+        <div class="settings-card">
+            <h3><i class="fas fa-shield-halved"></i> 安全信息</h3>
+            <div style="font-size: 0.88rem; color: #64748b; line-height: 1.8;">
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9;">
+                    <span>账户角色</span>
+                    <strong id="settingsRole" style="color: var(--user-primary);">-</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9;">
+                    <span>注册时间</span>
+                    <strong id="settingsCreated">-</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 0.5rem 0;">
+                    <span>最后登录</span>
+                    <strong id="settingsLastLogin">-</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
 </main>
 
 <!-- Toast 容器 -->
@@ -1760,10 +1988,12 @@ function switchPage(page) {
     document.getElementById('pageApikey').classList.toggle('page-hidden', page !== 'apikey');
     document.getElementById('pageStats').classList.toggle('page-hidden', page !== 'stats');
     document.getElementById('pageConnect').classList.toggle('page-hidden', page !== 'connect');
+    document.getElementById('pageSettings').classList.toggle('page-hidden', page !== 'settings');
 
     if (page === 'apikey') loadApiKeys();
     if (page === 'stats') loadStats(30);
     if (page === 'connect') loadConnectionInfo();
+    if (page === 'settings') loadSettingsInfo();
 }
 
 // ==================== 额度 ====================
@@ -2645,6 +2875,146 @@ function escapeHtml(str) {
     const d = document.createElement('div');
     d.textContent = str;
     return d.innerHTML;
+}
+
+// ==================== 账户设置 ====================
+function loadSettingsInfo() {
+    if (!currentUser) return;
+
+    // 显示用户信息
+    document.getElementById('settingsRole').textContent = currentUser.role === 'admin' ? '管理员' : '普通用户';
+    document.getElementById('settingsCreated').textContent = currentUser.created_at ?
+        new Date(currentUser.created_at * 1000).toLocaleDateString('zh-CN') : '-';
+    document.getElementById('settingsLastLogin').textContent = currentUser.last_login_at ?
+        new Date(currentUser.last_login_at * 1000).toLocaleString('zh-CN') : '-';
+}
+
+function togglePasswordVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    const icon = btn.querySelector('i');
+
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.className = 'fas fa-eye-slash';
+    } else {
+        input.type = 'password';
+        icon.className = 'fas fa-eye';
+    }
+}
+
+function validatePasswordStrength(password) {
+    const strengthDiv = document.getElementById('passwordStrength');
+    const strengthBar = document.getElementById('strengthBar');
+    const strengthText = document.getElementById('strengthText');
+
+    if (!password) {
+        strengthDiv.style.display = 'none';
+        return;
+    }
+
+    strengthDiv.style.display = 'block';
+
+    let score = 0;
+    const checks = {
+        length: password.length >= 8,
+        upper: /[A-Z]/.test(password),
+        lower: /[a-z]/.test(password),
+        digit: /\d/.test(password),
+        special: /[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)
+    };
+
+    score = Object.values(checks).filter(Boolean).length;
+    const percentage = (score / 5) * 100;
+
+    strengthBar.style.width = percentage + '%';
+
+    if (score <= 2) {
+        strengthBar.style.background = '#ef4444';
+        strengthText.textContent = '弱 - 建议使用更复杂的密码';
+        strengthText.style.color = '#ef4444';
+    } else if (score <= 3) {
+        strengthBar.style.background = '#f59e0b';
+        strengthText.textContent = '中等 - 可以更强';
+        strengthText.style.color = '#f59e0b';
+    } else if (score <= 4) {
+        strengthBar.style.background = '#10b981';
+        strengthText.textContent = '强 - 很好！';
+        strengthText.style.color = '#10b981';
+    } else {
+        strengthBar.style.background = '#0d9488';
+        strengthText.textContent = '非常强 - 非常安全！';
+        strengthText.style.color = '#0d9488';
+    }
+}
+
+function showPasswordAlert(message, type) {
+    const alert = document.getElementById('passwordAlert');
+    alert.className = `alert-settings alert-settings-${type} show`;
+    alert.innerHTML = type === 'error'
+        ? `<i class="fas fa-exclamation-circle"></i><span>${message}</span>`
+        : `<i class="fas fa-check-circle"></i><span>${message}</span>`;
+
+    if (type === 'success') {
+        setTimeout(() => {
+            alert.classList.remove('show');
+        }, 4000);
+    }
+}
+
+async function handleChangePassword(event) {
+    event.preventDefault();
+
+    const oldPassword = document.getElementById('oldPassword').value;
+    const newPassword = document.getElementById('newPassword').value;
+    const confirmPassword = document.getElementById('confirmPassword').value;
+    const btn = document.getElementById('changePasswordBtn');
+
+    // 客户端验证
+    if (newPassword !== confirmPassword) {
+        showPasswordAlert('两次输入的新密码不一致', 'error');
+        return;
+    }
+
+    if (newPassword.length < 8) {
+        showPasswordAlert('密码长度至少为 8 位', 'error');
+        return;
+    }
+
+    if (oldPassword === newPassword) {
+        showPasswordAlert('新密码不能与旧密码相同', 'error');
+        return;
+    }
+
+    // 禁用按钮，显示加载状态
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading" style="width:16px;height:16px;border-width:2px;"></span><span>修改中...</span>';
+
+    try {
+        const res = await fetch('/v1/user/password', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                old_password: oldPassword,
+                new_password: newPassword
+            })
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+            showPasswordAlert('密码修改成功！下次登录请使用新密码', 'success');
+            // 清空表单
+            document.getElementById('changePasswordForm').reset();
+            document.getElementById('passwordStrength').style.display = 'none';
+        } else {
+            showPasswordAlert(data.detail || '密码修改失败，请重试', 'error');
+        }
+    } catch (e) {
+        showPasswordAlert('网络错误，请稍后重试', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-key"></i> 修改密码';
+    }
 }
 
 init();

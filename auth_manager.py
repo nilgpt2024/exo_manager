@@ -1541,6 +1541,132 @@ class AuthManager:
             "active_today": active_today,
         }
 
+    # ==================== 密码管理 ====================
+
+    def change_password(
+        self,
+        user_id: str,
+        old_password: str,
+        new_password: str
+    ) -> Tuple[bool, str]:
+        """
+        修改用户密码
+
+        Args:
+            user_id: 用户ID
+            old_password: 旧密码
+            new_password: 新密码
+
+        Returns:
+            (success, message) - 成功时 message 为空
+        """
+        user = self._users.get(user_id)
+        if not user:
+            return False, "用户不存在"
+
+        # 验证旧密码
+        if not self._verify_password(old_password, user.website_password_hash):
+            return False, "旧密码错误"
+
+        # 验证新密码策略
+        is_valid, errors = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            return False, "; ".join(errors)
+
+        # 检查新密码不能与旧密码相同
+        if old_password == new_password:
+            return False, "新密码不能与旧密码相同"
+
+        # 哈希并保存新密码
+        user.website_password_hash = self._hash_password(new_password)
+        user.password_changed_at = time.time()
+        self._save_data()
+
+        logger.info(f"用户 {user.nickname} ({user_id}) 修改密码成功")
+        return True, ""
+
+    def admin_reset_password(
+        self,
+        admin_token: str,
+        target_user_id: str,
+        new_password: str
+    ) -> Tuple[bool, str]:
+        """
+        管理员重置用户密码
+
+        Args:
+            admin_token: 管理员的 session token
+            target_user_id: 目标用户ID
+            new_password: 新密码
+
+        Returns:
+            (success, message) - 成功时 message 为空
+        """
+        # 验证管理员权限
+        admin_user = self.validate_session(admin_token)
+        if not admin_user or admin_user.role != "admin":
+            return False, "权限不足"
+
+        # 查找目标用户
+        user = self._users.get(target_user_id)
+        if not user:
+            return False, "目标用户不存在"
+
+        # 不能重置其他管理员的密码（安全限制）
+        if user.role == "admin" and user.id != admin_user.id:
+            return False, "不能重置其他管理员的密码"
+
+        # 验证新密码策略
+        is_valid, errors = PasswordPolicy.validate(new_password)
+        if not is_valid:
+            return False, "; ".join(errors)
+
+        # 哈希并保存新密码
+        user.website_password_hash = self._hash_password(new_password)
+        user.password_changed_at = time.time()
+        self._save_data()
+
+        logger.info(f"管理员 {admin_user.nickname} 重置了用户 {user.nickname} ({target_user_id}) 的密码")
+        return True, ""
+
+    def _hash_password(self, password: str) -> str:
+        """哈希密码"""
+        if _BCRYPT_AVAILABLE:
+            salt = bcrypt.gensalt(rounds=12)
+            return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
+        else:
+            # PBKDF2 后备方案
+            salt = os.urandom(32)
+            iterations = 100000
+            key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+            return f"pbkdf2:{iterations}:{base64.b64encode(salt).decode()}:{base64.b64encode(key).decode()}"
+
+    def _verify_password(self, password: str, password_hash: str) -> bool:
+        """验证密码"""
+        if not password_hash:
+            return False
+
+        try:
+            if _BCRYPT_AVAILABLE:
+                return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+            else:
+                # PBKDF2 后备方案
+                if password_hash.startswith("pbkdf2:"):
+                    parts = password_hash.split(":")
+                    if len(parts) != 4:
+                        return False
+                    iterations = int(parts[1])
+                    salt = base64.b64decode(parts[2])
+                    stored_key = base64.b64decode(parts[3])
+                    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+                    return key == stored_key
+                else:
+                    # 兼容旧的 MD5 哈希（不推荐）
+                    return hashlib.md5(password.encode()).hexdigest() == password_hash
+        except Exception as e:
+            logger.error(f"密码验证异常: {e}")
+            return False
+
     # ==================== 权限检查 ====================
 
     def check_permission(self, token: str, required_role: str = "user") -> Optional[User]:

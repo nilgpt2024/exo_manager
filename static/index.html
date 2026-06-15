@@ -5,37 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EXO Cluster Manager - 集群管理控制台</title>
     
-    <!-- Font Awesome Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
-    <!-- Chart.js for visualizations -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    
-    <!-- vis.js Network for P2P topology visualization (多源备份) -->
-    <script src="https://unpkg.com/vis-network@9.1.0/standalone/umd/vis-network.min.js"></script>
+    <!-- Font Awesome Icons (本地文件) -->
+    <link rel="stylesheet" href="/static/font-awesome.min.css">
+
+    <!-- Chart.js for visualizations (本地文件) -->
+    <script src="/static/chart.umd.min.js"></script>
+
+    <!-- vis-network for P2P topology visualization (本地文件) -->
+    <script src="/static/vis-network.min.js"></script>
     <script>
         if (typeof vis === 'undefined') {
-            document.write('<script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.0/standalone/umd/vis-network.min.js"><\/script>');
-        }
-    </script>
-    <script>
-        if (typeof vis === 'undefined') {
-            console.error('[Topology] ❌ vis-network 加载失败！拓扑图将无法渲染，请检查网络连接');
+            console.error('[Topology] ❌ vis-network 加载失败！拓扑图将无法渲染');
         } else {
             console.log('[Topology] ✅ vis-network 加载成功');
         }
     </script>
-    
-    <!-- Marked.js for Markdown rendering (多源备份) -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <!-- Marked.js for Markdown rendering (本地文件) -->
+    <script src="/static/marked.min.js"></script>
     <script>
         if (typeof marked === 'undefined') {
-            document.write('<script src="https://unpkg.com/marked/marked.min.js"><\/script>');
-        }
-    </script>
-    <script>
-        if (typeof marked === 'undefined') {
-            console.error('[Markdown] ❌ marked.js 加载失败！请检查网络连接');
+            console.error('[Markdown] ❌ marked.js 加载失败！');
         } else {
             console.log('[Markdown] ✅ marked.js v' + (marked.version || 'unknown') + ' 加载成功');
         }
@@ -1239,9 +1229,76 @@
                     <i class="fas fa-sign-out-alt"></i>
                     退出
                 </button>
+
+                <button onclick="openChangePasswordModal()" class="btn btn-outline btn-sm" id="btnChangePwd" style="display: none;">
+                    <i class="fas fa-key"></i>
+                    修改密码
+                </button>
             </div>
         </div>
     </header>
+
+    <!-- 修改密码模态框 -->
+    <div id="changePasswordModal" class="modal-overlay">
+        <div class="modal" style="max-width: 450px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-lock"></i> 修改密码</h3>
+                <button class="close-btn" onclick="closeChangePasswordModal()">&times;</button>
+            </div>
+
+            <div id="pwdAlert" style="padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.875rem; display: none;"></div>
+
+            <form onsubmit="handleChangePassword(event)">
+                <div class="form-group">
+                    <label class="form-label">当前密码</label>
+                    <div style="position: relative;">
+                        <input type="password" id="pwdOld" class="form-input" placeholder="请输入当前密码"
+                               required autocomplete="current-password" style="padding-right: 3rem;">
+                        <button type="button" onclick="togglePwdVisibility('pwdOld', this)"
+                                style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: #9ca3af; cursor: pointer; font-size: 0.85rem;">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">新密码</label>
+                    <div style="position: relative;">
+                        <input type="password" id="pwdNew" class="form-input" placeholder="请输入新密码 (至少8位,含大小写+数字+特殊字符)"
+                               required autocomplete="new-password" style="padding-right: 3rem;"
+                               oninput="checkPwdStrength(this.value)">
+                        <button type="button" onclick="togglePwdVisibility('pwdNew', this)"
+                                style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: #9ca3af; cursor: pointer; font-size: 0.85rem;">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                    <div id="pwdStrengthBar" style="height: 4px; background: #e5e7eb; border-radius: 2px; margin-top: 0.5rem; overflow: hidden; display: none;">
+                        <div id="pwdStrengthFill" style="height: 100%; width: 0%; transition: all 0.3s;"></div>
+                    </div>
+                    <div id="pwdStrengthText" style="font-size: 0.75rem; margin-top: 0.25rem; color: #6b7280; display: none;"></div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">确认新密码</label>
+                    <div style="position: relative;">
+                        <input type="password" id="pwdConfirm" class="form-input" placeholder="请再次输入新密码"
+                               required autocomplete="new-password" style="padding-right: 3rem;">
+                        <button type="button" onclick="togglePwdVisibility('pwdConfirm', this)"
+                                style="position: absolute; right: 0.75rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: #9ca3af; cursor: pointer; font-size: 0.85rem;">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1.5rem;">
+                    <button type="button" class="btn btn-outline" onclick="closeChangePasswordModal()">取消</button>
+                    <button type="submit" class="btn btn-primary" id="pwdSubmitBtn">
+                        <i class="fas fa-check"></i> 确认修改
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Main Content -->
     <main class="container">
@@ -1547,8 +1604,64 @@
                 <div id="pipelineContent"></div>
             </div>
         </div>
-    </main>
 
+       
+
+    </main>
+ <!-- Tab: 系统日志 -->
+
+        <div id="tabContentLogs" class="container" style="display: none;">
+            <!-- 日志控制栏 -->
+            <div style="display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
+                <!-- 级别过滤 -->
+                <select id="logLevelFilter" onchange="filterLogs()"
+                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.85rem; background: white;">
+                    <option value="">全部级别</option>
+                    <option value="info">信息</option>
+                    <option value="success">成功</option>
+                    <option value="warning">警告</option>
+                    <option value="error">错误</option>
+                </select>
+
+                <!-- 分类过滤 -->
+                <select id="logCategoryFilter" onchange="filterLogs()"
+                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.85rem; background: white;">
+                    <option value="">全部分类</option>
+                </select>
+
+                <!-- 自动刷新开关 -->
+                <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--gray-600); cursor: pointer;">
+                    <input type="checkbox" id="logAutoRefresh" checked onchange="toggleAutoRefresh()" style="cursor: pointer;">
+                    自动刷新 (5s)
+                </label>
+
+                <!-- 手动刷新 -->
+                <button onclick="fetchLogs()" id="logRefreshBtn"
+                        style="padding: 0.5rem 1rem; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;"
+                        onmouseover="this.style.background='var(--primary-dark)'" onmouseout="this.style.background='var(--primary)'">
+                    <i class="fas fa-sync-alt" id="logRefreshIcon"></i> 刷新
+                </button>
+
+                <!-- 清空日志 -->
+                <button onclick="clearLogs()"
+                        style="padding: 0.5rem 1rem; background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 600;"
+                        onmouseover="this.style.background='var(--danger)'; this.style.color='white'" onmouseout="this.style.background='transparent'; this.style.color='var(--danger)'">
+                    <i class="fas fa-trash-alt"></i> 清空
+                </button>
+
+                <!-- 统计信息 -->
+                <span id="logStats" style="margin-left: auto; font-size: 0.82rem; color: var(--gray-500);">共 0 条日志</span>
+            </div>
+
+            <!-- 日志容器 -->
+            <div id="logContainer" style="background: #0d1117; border-radius: 12px; padding: 1rem; min-height: 500px; max-height: 70vh; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace; font-size: 0.83rem; line-height: 1.7; border: 1px solid #30363d; box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);">
+                <div id="logEmptyState" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #484f58;">
+                    <i class="fas fa-scroll" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.4;"></i>
+                    <p>暂无系统日志</p>
+                    <p style="font-size: 0.78rem; margin-top: 0.3rem;">模型加载、节点状态变更等事件将在此显示</p>
+                </div>
+            </div>
+        </div>
     <!-- ==================== 📊 Tab 7: API 统计面板 ==================== -->
     <div id="tabContentApiStats" class="container" style="display: none;">
 
@@ -1614,7 +1727,7 @@
         </div>
 
         <!-- 系统级核心指标 -->
-        <div class="stats-grid" style="margin-bottom: 2rem;" id="adminApiStatsGrid">
+        <div class="stats-grid admin-only" style="margin-bottom: 2rem;" id="adminApiStatsGrid">
             <div class="stat-card nodes" style="border-left: 4px solid #6366f1;">
                 <div class="stat-icon" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);">
                     <i class="fas fa-phone-volume"></i>
@@ -3262,6 +3375,22 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         
         function renderTopologyGraph(data) {
             const container = document.getElementById('topologyNetwork');
+
+            // 检查 vis-network 库是否已加载
+            if (typeof vis === 'undefined') {
+                console.warn('[Topology] vis-network 未加载，跳过拓扑图渲染');
+                if (container) {
+                    container.innerHTML = `
+                        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:300px;color:#9ca3af;gap:1rem;">
+                            <i class="fas fa-network-wired" style="font-size:3rem;opacity:0.4;"></i>
+                            <div style="text-align:center;">
+                                <div style="font-weight:600;margin-bottom:0.25rem;">拓扑图暂不可用</div>
+                                <div style="font-size:0.8rem;">vis-network 库加载失败，请刷新页面重试</div>
+                            </div>
+                        </div>`;
+                }
+                return;
+            }
             
             // 创建vis.js数据
             const nodes = new vis.DataSet(data.nodes.map(n => ({
@@ -3567,6 +3696,10 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             userRole.className = 'badge ' + (currentUser.role === 'admin' ? 'badge-primary' : 'badge-info');
             btnLogout.style.display = 'inline-flex';
 
+            // 显示修改密码按钮
+            const btnChangePwd = document.getElementById('btnChangePwd');
+            if (btnChangePwd) btnChangePwd.style.display = 'inline-flex';
+
             // 权限控制：普通用户隐藏管理功能
             if (currentUser.role !== 'admin') {
                 document.querySelectorAll('.admin-only').forEach(el => {
@@ -3587,6 +3720,145 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 await fetch('/admin/logout', { method: 'POST' });
             } catch (e) {}
             window.location.href = '/admin';
+        }
+
+        // ==================== 修改密码功能 ====================
+        function openChangePasswordModal() {
+            document.getElementById('changePasswordModal').classList.add('active');
+            // 重置表单
+            document.getElementById('pwdAlert').style.display = 'none';
+            document.getElementById('changePasswordModal').querySelector('form').reset();
+            document.getElementById('pwdStrengthBar').style.display = 'none';
+            document.getElementById('pwdStrengthText').style.display = 'none';
+        }
+
+        function closeChangePasswordModal() {
+            document.getElementById('changePasswordModal').classList.remove('active');
+        }
+
+        function togglePwdVisibility(inputId, btn) {
+            const input = document.getElementById(inputId);
+            const icon = btn.querySelector('i');
+            if (input.type === 'password') {
+                input.type = 'text';
+                icon.className = 'fas fa-eye-slash';
+            } else {
+                input.type = 'password';
+                icon.className = 'fas fa-eye';
+            }
+        }
+
+        function checkPwdStrength(password) {
+            const bar = document.getElementById('pwdStrengthBar');
+            const fill = document.getElementById('pwdStrengthFill');
+            const text = document.getElementById('pwdStrengthText');
+
+            if (!password) {
+                bar.style.display = 'none';
+                text.style.display = 'none';
+                return;
+            }
+
+            bar.style.display = 'block';
+            text.style.display = 'block';
+
+            let score = 0;
+            if (password.length >= 8) score++;
+            if (/[A-Z]/.test(password)) score++;
+            if (/[a-z]/.test(password)) score++;
+            if (/\d/.test(password)) score++;
+            if (/[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)) score++;
+
+            const pct = (score / 5) * 100;
+            fill.style.width = pct + '%';
+
+            if (score <= 2) {
+                fill.style.background = '#ef4444';
+                text.textContent = '弱 - 建议使用更复杂的密码';
+                text.style.color = '#ef4444';
+            } else if (score <= 3) {
+                fill.style.background = '#f59e0b';
+                text.textContent = '中等 - 可以更强';
+                text.style.color = '#f59e0b';
+            } else if (score <= 4) {
+                fill.style.background = '#10b981';
+                text.textContent = '强 - 很好！';
+                text.style.color = '#10b981';
+            } else {
+                fill.style.background = '#4f46e5';
+                text.textContent = '非常强 - 非常安全！';
+                text.style.color = '#4f46e5';
+            }
+        }
+
+        function showPwdAlert(msg, type) {
+            const el = document.getElementById('pwdAlert');
+            el.style.display = 'block';
+            el.className = type === 'error'
+                ? ''  // reset
+                : '';
+            el.style.background = type === 'error' ? '#fef2f2' : '#f0fdf4';
+            el.style.color = type === 'error' ? '#dc2626' : '#16a34a';
+            el.style.border = type === 'error' ? '1px solid #fecaca' : '1px solid #bbf7d0';
+            el.innerHTML = '<i class="fas fa-' + (type === 'error' ? 'exclamation-circle' : 'check-circle') + '"></i> ' + msg;
+
+            if (type === 'success') {
+                setTimeout(() => { el.style.display = 'none'; }, 4000);
+            }
+        }
+
+        async function handleChangePassword(event) {
+            event.preventDefault();
+
+            const oldPwd = document.getElementById('pwdOld').value;
+            const newPwd = document.getElementById('pwdNew').value;
+            const confirmPwd = document.getElementById('pwdConfirm').value;
+            const btn = document.getElementById('pwdSubmitBtn');
+
+            // 客户端验证
+            if (newPwd !== confirmPwd) {
+                showPwdAlert('两次输入的新密码不一致', 'error');
+                return;
+            }
+            if (newPwd.length < 8) {
+                showPwdAlert('密码长度至少为 8 位', 'error');
+                return;
+            }
+            if (oldPwd === newPwd) {
+                showPwdAlert('新密码不能与旧密码相同', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;"></span> 修改中...';
+
+            try {
+                const res = await fetch('/v1/user/password', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        old_password: oldPwd,
+                        new_password: newPwd
+                    })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.success) {
+                    showPwdAlert('密码修改成功！下次登录请使用新密码', 'success');
+                    // 清空表单
+                    event.target.reset();
+                    document.getElementById('pwdStrengthBar').style.display = 'none';
+                    document.getElementById('pwdStrengthText').style.display = 'none';
+                } else {
+                    showPwdAlert(data.detail || '密码修改失败，请重试', 'error');
+                }
+            } catch (e) {
+                showPwdAlert('网络错误，请稍后重试', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-check"></i> 确认修改';
+            }
         }
         
         // ==================== 多实例管理功能 (新增) ====================
@@ -3671,7 +3943,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             btnLoad.innerHTML = `<i class="fas fa-clone"></i> 加载 ${count} 个 ${selectedName} 实例`;
         }
         
-
 
         
         async function getModelInstances(modelId) {
@@ -3991,8 +4262,14 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             } else if (tab === 'logs') {
                 activeTab = logsTab;
                 activeContent = logsContent;
-                // 切到日志 tab 时自动加载
-                fetchLogs();
+                // 切到日志 tab 时自动加载（异步，不阻塞 UI 切换）
+                if (typeof fetchLogs === 'function') {
+                    fetchLogs().catch(err => {
+                        console.error('[switchMainTab] 日志加载失败:', err);
+                    });
+                } else {
+                    console.warn('[switchMainTab] fetchLogs 函数未定义');
+                }
             }
 
             if (activeTab) {
@@ -7272,6 +7549,12 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         let cachedAdminStatsData = null;
 
         async function loadAdminApiStats() {
+            // 权限检查：非管理员直接跳过
+            if (!currentUser || currentUser.role !== 'admin') {
+                console.warn('[API Stats] 非管理员，跳过加载');
+                return;
+            }
+
             const days = document.getElementById('adminStatsDaysSelect')?.value || 30;
 
             console.log('[API Stats] 开始加载数据, 天数:', days);
@@ -7281,8 +7564,8 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
 
                 // 并行请求系统概览和用户统计
                 const [overviewRes, usersRes] = await Promise.all([
-                    fetch(`/v1/admin/api/overview?days=${days}`),
-                    fetch(`/v1/admin/api/stats?days=${days}`)
+                    fetch(`/v1/admin/api/overview?days=${days}`, { credentials: 'include' }),
+                    fetch(`/v1/admin/api/stats?days=${days}`, { credentials: 'include' })
                 ]);
 
                 console.log('[API Stats] HTTP 状态:', overviewRes.status, usersRes.status);
@@ -7382,6 +7665,10 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         }
 
         function renderHourlyDistribution(hourlyData) {
+            if (typeof Chart === 'undefined') {
+                console.warn('[Chart.js] 未加载，跳过小时分布图渲染');
+                return;
+            }
             const ctx = document.getElementById('hourlyDistributionChart');
             if (!ctx) return;
 
@@ -7445,6 +7732,10 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         }
 
         function renderModelPieChart(models) {
+            if (typeof Chart === 'undefined') {
+                console.warn('[Chart.js] 未加载，跳过模型饼图渲染');
+                return;
+            }
             const ctx = document.getElementById('modelUsagePieChart');
             if (!ctx) return;
 
@@ -8330,93 +8621,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 </div>
             </div>
         </div>
-
-        <!-- Tab: 系统日志 -->
-        <div id="tabContentLogs" class="container" style="display: none;">
-            <!-- 日志控制栏 -->
-            <div style="
-                display: flex;
-                gap: 0.75rem;
-                align-items: center;
-                margin-bottom: 1rem;
-                flex-wrap: wrap;
-            ">
-                <!-- 级别过滤 -->
-                <select id="logLevelFilter" onchange="filterLogs()"
-                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300);
-                                       border-radius: 8px; font-size: 0.85rem; background: white;">
-                    <option value="">全部级别</option>
-                    <option value="info">ℹ️ 信息</option>
-                    <option value="success">✅ 成功</option>
-                    <option value="warning">⚠️ 警告</option>
-                    <option value="error">❌ 错误</option>
-                </select>
-
-                <!-- 分类过滤 -->
-                <select id="logCategoryFilter" onchange="filterLogs()"
-                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300);
-                                       border-radius: 8px; font-size: 0.85rem; background: white;">
-                    <option value="">全部分类</option>
-                </select>
-
-                <!-- 自动刷新开关 -->
-                <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--gray-600); cursor: pointer;">
-                    <input type="checkbox" id="logAutoRefresh" checked
-                           onchange="toggleAutoRefresh()" style="cursor: pointer;">
-                    自动刷新 (5s)
-                </label>
-
-                <!-- 手动刷新 -->
-                <button onclick="fetchLogs()" id="logRefreshBtn"
-                        style="padding: 0.5rem 1rem; background: var(--primary); color: white;
-                               border: none; border-radius: 8px; cursor: pointer;
-                               font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;"
-                               onmouseover="this.style.background='var(--primary-dark)'"
-                               onmouseout="this.style.background='var(--primary)'">
-                    <i class="fas fa-sync-alt" id="logRefreshIcon"></i> 刷新
-                </button>
-
-                <!-- 清空日志 -->
-                <button onclick="clearLogs()"
-                        style="padding: 0.5rem 1rem; background: transparent; color: var(--danger);
-                               border: 1px solid var(--danger); border-radius: 8px;
-                               cursor: pointer; font-size: 0.85rem; font-weight: 600;"
-                               onmouseover="this.style.background='var(--danger)'; this.style.color='white'"
-                               onmouseout="this.style.background='transparent'; this.style.color='var(--danger)'">
-                    <i class="fas fa-trash-alt"></i> 清空
-                </button>
-
-                <!-- 统计信息 -->
-                <span id="logStats" style="margin-left: auto; font-size: 0.82rem; color: var(--gray-500);">
-                    共 0 条日志
-                </span>
-            </div>
-
-            <!-- 日志容器 -->
-            <div id="logContainer" style="
-                background: #0d1117;
-                border-radius: 12px;
-                padding: 1rem;
-                min-height: 500px;
-                max-height: 70vh;
-                overflow-y: auto;
-                font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
-                font-size: 0.83rem;
-                line-height: 1.7;
-                border: 1px solid #30363d;
-                box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);
-            ">
-                <div id="logEmptyState" style="
-                    display: flex; flex-direction: column; align-items: center;
-                    justify-content: center; height: 300px; color: #484f58;
-                ">
-                    <i class="fas fa-scroll" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.4;"></i>
-                    <p>暂无系统日志</p>
-                    <p style="font-size: 0.78rem; margin-top: 0.3rem;">模型加载、节点状态变更等事件将在此显示</p>
-                </div>
-            </div>
-        </div>
-    </div>
 
 </body>
 </html>

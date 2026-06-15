@@ -98,6 +98,15 @@ class EmailLoginRequest(BaseModel):
     password: str = Field(..., description="密码")
 
 
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., description="旧密码")
+    new_password: str = Field(..., description="新密码")
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: str = Field(..., description="新密码")
+
+
 # ==================== 辅助函数 ====================
 
 def get_session_token(request: Request) -> Optional[str]:
@@ -682,6 +691,46 @@ async def get_current_user(request: Request):
     return {"success": True, "data": user}
 
 
+@auth_router.put("/v1/user/password")
+async def change_password(request_data: ChangePasswordRequest, request: Request):
+    """
+    修改当前用户密码
+
+    需要提供旧密码和新密码，新密码必须符合复杂度策略
+    """
+    token = get_session_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    auth_mgr = get_auth_manager()
+    user = auth_mgr.validate_session(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Session expired")
+
+    success, error_msg = auth_mgr.change_password(
+        user_id=user.id,
+        old_password=request_data.old_password,
+        new_password=request_data.new_password
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # 记录审计日志
+    audit = get_audit_logger()
+    audit.log_security_event(
+        event_type="Password changed",
+        ip=request.client.host if request.client else "unknown",
+        details={"user_id": user.id},
+        severity="INFO"
+    )
+
+    return {
+        "success": True,
+        "message": "密码修改成功"
+    }
+
+
 # ================================================================
 #  管理员路由 (/admin/*) - 可限制内网访问
 # ================================================================
@@ -836,3 +885,46 @@ async def admin_delete_user(user_id: str, request: Request):
     if not success:
         raise HTTPException(status_code=404, detail="User not found")
     return {"success": True, "message": "User deleted"}
+
+
+@admin_router.post("/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: str, request_data: AdminResetPasswordRequest, request: Request):
+    """
+    管理员重置用户密码
+
+    管理员可以为用户重置密码（不能重置其他管理员的密码）
+    """
+    token = get_session_token(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not logged in")
+
+    auth_mgr = get_auth_manager()
+    admin_user = auth_mgr.validate_session(token)
+    if not admin_user or admin_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    success, error_msg = auth_mgr.admin_reset_password(
+        admin_token=token,
+        target_user_id=user_id,
+        new_password=request_data.new_password
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    # 记录审计日志
+    audit = get_audit_logger()
+    audit.log_security_event(
+        event_type="Admin reset password",
+        ip=request.client.host if request.client else "unknown",
+        details={
+            "admin_id": admin_user.id,
+            "target_user_id": user_id
+        },
+        severity="WARNING"
+    )
+
+    return {
+        "success": True,
+        "message": "密码重置成功"
+    }
