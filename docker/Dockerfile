@@ -1,0 +1,53 @@
+# ===========================================
+# EXO Cluster Manager Docker 镜像
+# ===========================================
+# 构建命令 (从项目根目录): docker build -f docker/Dockerfile -t exo-manager:latest .
+# 运行命令: docker run -p 8080:8080 exo-manager:latest
+# 或使用: cd docker && docker compose up -d
+# ===========================================
+
+FROM python:3.11-slim
+
+LABEL maintainer="EXO Team"
+LABEL description="EXO Distributed AI Inference Cluster Manager"
+LABEL version="1.0.0"
+
+# 设置环境变量
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    EXO_ENV=production \
+    EXO_PORT=8080
+
+# 安装系统依赖 (gRPC 和加密库需要)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建工作目录
+WORKDIR /app
+
+# 先复制依赖文件，利用 Docker 缓存层
+COPY requirements.txt .
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制项目文件
+COPY . .
+
+# 创建数据目录 (用于存储数据库、日志等)
+RUN mkdir -p /app/data /app/logs
+
+# 暴露端口
+EXPOSE 8080
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/cluster/status')" || exit 1
+
+# 启动命令
+CMD ["python", "server.py", "--port", "8080"]
