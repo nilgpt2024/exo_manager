@@ -1,9 +1,14 @@
 # EXO Cluster Manager 依赖
 # =========================
+# 自动生成于 2026-06-15
+# 基于项目代码导入分析
 
 # Web框架
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
+
+# Web框架基础 (中间件/WebSocket)
+starlette>=0.41.0
 
 # 数据验证
 pydantic>=2.10.0
@@ -12,8 +17,14 @@ pydantic>=2.10.0
 grpcio>=1.68.0
 grpcio-tools>=1.68.0
 
+# Protobuf (gRPC依赖, 显式声明确保版本兼容)
+protobuf>=5.28.0
+
 # HTTP客户端 (流式代理/认证请求)
 httpx>=0.28.0
+
+# HTTP客户端 (FRP文件下载)
+requests>=2.32.0
 
 # 异步HTTP客户端 (测试/示例脚本)
 aiohttp>=3.10.0
