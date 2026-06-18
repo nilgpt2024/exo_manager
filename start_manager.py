@@ -211,6 +211,17 @@ def main():
     
     args = parser.parse_args()
 
+    # ==================== 从环境变量补充 FRP 配置 (Docker 场景) ====================
+    # 当未通过命令行指定时，从环境变量读取（docker-compose 传入）
+    if not args.frp_enable and os.environ.get('EXO_FRP_ENABLE', '').lower() in ('true', '1', 'yes'):
+        args.frp_enable = True
+    if os.environ.get('EXO_FRP_BIND_PORT'):
+        args.frp_bind_port = int(os.environ['EXO_FRP_BIND_PORT'])
+    if not args.frp_token and os.environ.get('EXO_FRP_TOKEN'):
+        args.frp_token = os.environ['EXO_FRP_TOKEN']
+    if os.environ.get('EXO_FRP_DASHBOARD_PORT'):
+        args.frp_dashboard_port = int(os.environ['EXO_FRP_DASHBOARD_PORT'])
+
     # ==================== FRP Token 生成 (在横幅打印前) ====================
     frp_info = None
     if args.frp_enable:

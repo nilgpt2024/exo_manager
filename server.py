@@ -58,7 +58,7 @@ from pathlib import Path
 
 # FastAPI相关导入
 try:
-    from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Body
+    from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, Body, Query
     from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from fastapi.middleware.cors import CORSMiddleware
@@ -102,9 +102,101 @@ from load_balancer import (
     init_load_balancer
 )
 
+# 导入自动模型分配器
+from auto_model_allocator import (
+    AutoModelAllocator,
+    AllocationStrategy,
+    ModelSpec,
+    MODEL_LIBRARY
+)
+
+# 导入节点稳定性管理和故障恢复模块
+from node_stability_manager import (
+    NodeStabilityManager,
+    FaultRecoveryManager,
+    AllocationPlanManager,
+    ResilientAllocationManager
+)
+
+# 导入主备冗余分配系统
+from ha_model_allocator import (
+    HAModelAllocator,
+    RedundancyMode,
+    InstanceRole,
+    InstanceStatus,
+    FailoverState
+)
+
+# 导入自动分配触发器
+from auto_alloc_trigger import AutoAllocTrigger, TriggerConfig
+
 # 全局管理器实例
 manager: Optional[EXOClusterManager] = None
 topo_manager: Optional[P2PTopologyManager] = None
+
+# 自动模型分配器实例（延迟初始化，依赖manager）
+_auto_allocator: Optional[AutoModelAllocator] = None
+
+# 弹性分配管理器（整合稳定性+恢复+版本管理）
+_resilient_allocator: Optional[ResilientAllocationManager] = None
+
+# 主备冗余分配器（高可用模式）
+_ha_allocator: Optional[HAModelAllocator] = None
+
+# 自动分配触发器
+_auto_trigger: Optional[AutoAllocTrigger] = None
+
+def get_auto_allocator() -> AutoModelAllocator:
+    """获取自动分配器实例（延迟初始化）"""
+    global _auto_allocator
+    if _auto_allocator is None and manager is not None:
+        _auto_allocator = AutoModelAllocator(manager)
+        logger.info("✅ [AutoAlloc] 自动模型分配器初始化完成")
+    if _auto_allocator is None:
+        raise HTTPException(status_code=503, detail="集群管理器未就绪")
+    return _auto_allocator
+
+def get_resilient_allocator() -> ResilientAllocationManager:
+    """获取弹性分配管理器实例（延迟初始化）"""
+    global _resilient_allocator
+    if _resilient_allocator is None and manager is not None:
+        _resilient_allocator = ResilientAllocationManager(manager)
+
+        # 启动后台监控循环
+        asyncio.create_task(_resilient_allocator.stability_mgr.start_monitoring_loop(interval=30.0))
+
+        logger.info("✅ [ResilientAlloc] 弹性分配管理器初始化完成（含监控循环）")
+    if _resilient_allocator is None:
+        raise HTTPException(status_code=503, detail="集群管理器未就绪")
+    return _resilient_allocator
+
+def get_ha_allocator() -> HAModelAllocator:
+    """获取主备冗余分配器实例（延迟初始化，含健康监控）"""
+    global _ha_allocator
+    if _ha_allocator is None and manager is not None:
+        _ha_allocator = HAModelAllocator(manager)
+
+        # 启动健康监控系统
+        asyncio.create_task(_ha_allocator.start_health_monitoring())
+
+        logger.info("✅ [HAAlloc] 主备冗余分配器初始化完成（含健康监控）")
+    if _ha_allocator is None:
+        raise HTTPException(status_code=503, detail="集群管理器未就绪")
+    return _ha_allocator
+
+def get_auto_trigger() -> AutoAllocTrigger:
+    """获取自动分配触发器实例（延迟初始化，含监控循环）"""
+    global _auto_trigger
+    if _auto_trigger is None and manager is not None:
+        _auto_trigger = AutoAllocTrigger(manager)
+
+        # 启动自动分配（包含启动初始化）
+        asyncio.create_task(_auto_trigger.start())
+
+        logger.info("✅ [AutoTrigger] 自动分配触发器初始化完成（已启动）")
+    if _auto_trigger is None:
+        raise HTTPException(status_code=503, detail="集群管理器未就绪")
+    return _auto_trigger
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -4570,6 +4662,164 @@ async def serve_landing(request: Request):
     return HTMLResponse(content="<h1>Page not found</h1>", status_code=404)
 
 
+# ==================== 节点安全管理 API (轻量版) ====================
+
+@app.get("/api/security/status", response_model=Dict)
+async def get_security_status():
+    """获取安全状态 (轻量)"""
+    try:
+        from node_security import get_security_manager
+        return {"success": True, "data": get_security_manager().status(), "timestamp": time.time()}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+    except Exception as e:
+        logger.error(f"获取安全状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/security/ip/{ip_address}", response_model=Dict)
+async def get_ip_info(ip_address: str):
+    """查询IP信息"""
+    try:
+        from node_security import get_security_manager
+        return {"success": True, "data": get_security_manager().get_ip_info(ip_address)}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+
+
+@app.post("/api/security/ban", response_model=Dict)
+async def ban_ip(request: Dict[str, Any]):
+    """手动封禁IP"""
+    try:
+        from node_security import get_security_manager
+        sec = get_security_manager()
+        ip = request.get("ip", "")
+        if not ip:
+            raise HTTPException(status_code=400, detail="必须提供IP")
+        
+        sec.ban(ip, request.get("reason", "Manual"))
+        return {"success": True, "message": f"已封禁 {ip}"}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+
+
+@app.post("/api/security/unban", response_model=Dict)
+async def unban_ip(request: Dict[str, Any]):
+    """解封IP"""
+    try:
+        from node_security import get_security_manager
+        ip = request.get("ip", "")
+        success = get_security_manager().unban(ip)
+        return {"success": success, "message": f"已解封" if success else "IP未被封禁"}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+
+
+@app.post("/api/security/whitelist", response_model=Dict)
+async def add_whitelist(request: Dict[str, Any]):
+    """添加白名单"""
+    try:
+        from node_security import get_security_manager
+        cidr = request.get("cidr", "")
+        if not cidr:
+            raise HTTPException(status_code=400, detail="必须提供CIDR")
+        
+        ok = get_security_manager().add_whitelist(cidr)
+        return {"success": ok, "message": "已添加" if ok else "格式错误"}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+
+
+@app.post("/api/security/blacklist", response_model=Dict)
+async def add_blacklist(request: Dict[str, Any]):
+    """添加黑名单"""
+    try:
+        from node_security import get_security_manager
+        cidr = request.get("cidr", "")
+        if not cidr:
+            raise HTTPException(status_code=400, detail="必须提供CIDR")
+        
+        ok = get_security_manager().add_blacklist(cidr)
+        return {"success": ok, "message": "已添加" if ok else "格式错误"}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+
+
+@app.post("/api/security/trust", response_model=Dict)
+async def trust_node(request: Dict[str, Any]):
+    """标记可信节点"""
+    try:
+        from node_security import get_security_manager
+        node_id = request.get("node_id", "")
+        if not node_id:
+            raise HTTPException(status_code=400, detail="必须提供node_id")
+        
+        get_security_manager().trust(node_id)
+        return {"success": True, "message": f"{node_id} 已标记为可信"}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+
+
+@app.delete("/api/security/trust/{node_id}", response_model=Dict)
+async def untrust_node(node_id: str):
+    """取消可信标记"""
+    try:
+        from node_security import get_security_manager
+        get_security_manager().untrust(node_id)
+        return {"success": True, "message": "已取消标记"}
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+
+
+@app.post("/api/security/node-token/generate", response_model=Dict)
+async def generate_node_token(request: Dict[str, Any]):
+    """
+    为节点生成认证Token (管理员接口)
+
+    Request Body:
+    {
+        "node_id": "worker-1",
+        "extra_data": {"location": "datacenter-a"}
+    }
+
+    Returns:
+        新生成的Token（仅显示一次！）
+
+    Warning:
+        Token 仅在响应中显示一次，请妥善保存！
+    """
+    # TODO: 添加权限验证
+    try:
+        from node_security import get_security_manager
+        security = get_security_manager()
+
+        node_id = request.get("node_id", "")
+        extra_data = request.get("extra_data")
+
+        if not node_id:
+            raise HTTPException(status_code=400, detail="必须提供node_id")
+
+        token = security.generate_node_token(node_id, extra_data)
+
+        logger.info(f"[Admin] 为节点 {node_id} 生成了新的认证Token")
+
+        return {
+            "success": True,
+            "data": {
+                "node_id": node_id,
+                "token": token,
+                "warning": "Token 仅在此响应中显示一次，请立即保存到安全位置！"
+            },
+            "timestamp": time.time()
+        }
+
+    except ImportError:
+        raise HTTPException(status_code=503, detail="安全模块未安装")
+    except Exception as e:
+        logger.error(f"生成Token失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/landing", response_class=HTMLResponse)
 async def serve_landing_page(request: Request):
     """项目介绍落地页（备用路径）"""
@@ -4577,6 +4827,1366 @@ async def serve_landing_page(request: Request):
     if landing_html.exists():
         return HTMLResponse(content=landing_html.read_text(encoding='utf-8'))
     return HTMLResponse(content="<h1>Page not found</h1>", status_code=404)
+
+
+# ==================== 自动模型分配 API ====================
+
+@app.get("/api/auto-allocate/status", response_model=Dict)
+async def get_auto_allocate_status():
+    """
+    获取自动分配器当前状态
+
+    Returns:
+        {
+            "allocator_status": "active",
+            "online_nodes": 3,
+            "total_memory_gb": 48.0,
+            "free_memory_gb": 32.0,
+            "usable_memory_gb": 22.4,
+            "loaded_models": 2,
+            "current_plan": {...} | null,
+            "library_size": 15,
+            "strategies": [...]
+        }
+    """
+    try:
+        allocator = get_auto_allocator()
+        return {
+            "success": True,
+            "data": allocator.get_current_status(),
+            "timestamp": time.time()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AutoAlloc] 获取状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auto-allocate/preview-resource", response_model=Dict)
+async def preview_resource_distribution():
+    """
+    预览资源分布情况（不执行分配）
+
+    用于前端展示当前集群资源和可用模型库
+
+    Returns:
+        {
+            "timestamp": 1234567890,
+            "nodes": [...],
+            "models_by_category": {...},
+            "recommendations": [...]
+        }
+    """
+    try:
+        allocator = get_auto_allocator()
+        return {
+            "success": True,
+            "data": allocator.preview_resource_distribution(),
+            "timestamp": time.time()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AutoAlloc] 预览资源失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auto-allocate/preview", response_model=Dict)
+async def preview_optimal_plan(request: Dict[str, Any] = Body(...)):
+    """
+    预览最优模型分配方案（不执行）
+
+    Request Body:
+    {
+        "strategy": "maximize_utilization",  // 可选，默认 maximize_utilization
+        "exclude_models": ["model_id"],       // 可选，要排除的模型
+        "force_include": ["qwen3-4b"],        // 可选，强制包含的模型
+        "custom_priority": ["id1", "id2"]     // 可选，仅 custom 策略时使用
+    }
+
+    Returns:
+        完整的分配方案，包括：
+        - 分配详情（每个模型的节点和分片）
+        - 统计信息（总模型数、参数量、利用率）
+        - 未分配模型及原因
+        - 优化建议
+        - 性能评分
+    """
+    try:
+        allocator = get_auto_allocator()
+
+        # 解析策略
+        strategy_str = request.get("strategy", "maximize_utilization")
+        try:
+            strategy = AllocationStrategy(strategy_str)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效的策略: {strategy_str}，可选值: {[s.value for s in AllocationStrategy]}"
+            )
+
+        # 生成方案
+        plan = allocator.generate_optimal_plan(
+            strategy=strategy,
+            exclude_models=request.get("exclude_models"),
+            force_include=request.get("force_include"),
+            custom_priority=request.get("custom_priority")
+        )
+
+        logger.info(f"[AutoAlloc] 📋 方案预览完成: {plan.plan_id}, "
+                   f"{plan.total_models}个模型, 评分{plan.performance_score:.1f}")
+
+        return {
+            "success": True,
+            "data": plan.to_dict(),
+            "message": f"最优方案已生成：可加载 {plan.total_models} 个模型，"
+                      f"总计 {plan.total_param_count:.1f}B 参数，"
+                      f"显存利用率 {plan.memory_utilization*100:.1f}%"
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning(f"[AutoAlloc] 方案预览参数错误: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[AutoAlloc] 方案预览失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成方案失败: {str(e)}")
+
+
+@app.post("/api/auto-allocate/execute", response_model=Dict)
+async def execute_allocation_plan(request: Dict[str, Any] = Body(...)):
+    """
+    执行自动模型分配
+
+    Request Body (两种模式):
+
+    模式1 - 使用新生成的方案:
+    {
+        "strategy": "maximize_utilization",  // 可选
+        "exclude_models": [...],              // 可选
+        "force_include": [...]                // 可选
+    }
+
+    模式2 - 使用已有方案的plan_id:
+    {
+        "plan_id": "plan_1234567890"
+    }
+
+    Returns:
+        {
+            "executed_at": 1234567890,
+            "summary": {"total": 5, "success": 4, "failed": 1, "skipped": 0},
+            "results": {"success": [...], "failed": [...], "skipped": [...]}
+        }
+    """
+    try:
+        allocator = get_auto_allocator()
+
+        # 判断使用哪种模式
+        if "plan_id" in request and request["plan_id"]:
+            # 模式2: 使用已有方案
+            plan_id = request["plan_id"]
+            plan = None
+            for p in allocator.allocation_history:
+                if p.plan_id == plan_id:
+                    plan = p
+                    break
+
+            if not plan:
+                raise HTTPException(status_code=404, detail=f"未找到方案: {plan_id}")
+
+            logger.info(f"[AutoAlloc] 🚀 执行已有方案: {plan_id}")
+        else:
+            # 模式1: 生成新方案并执行
+            strategy_str = request.get("strategy", "maximize_utilization")
+            try:
+                strategy = AllocationStrategy(strategy_str)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"无效策略: {strategy_str}")
+
+            plan = allocator.generate_optimal_plan(
+                strategy=strategy,
+                exclude_models=request.get("exclude_models"),
+                force_include=request.get("force_include")
+            )
+
+            logger.info(f"[AutoAlloc] 🚀 生成并执行新方案: {plan.plan_id}")
+
+        # 异步执行分配
+        report = await allocator.execute_plan(plan)
+
+        success_count = report["summary"]["success"]
+        total_count = report["summary"]["total"]
+
+        logger.info(f"[AutoAlloc] ✅ 执行完成: {success_count}/{total_count} 成功")
+
+        return {
+            "success": True,
+            "data": report,
+            "message": f"分配执行完成：{success_count}/{total_count} 个模型加载成功"
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.warning(f"[AutoAlloc] 执行参数错误: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[AutoAlloc] 执行失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"执行分配失败: {str(e)}")
+
+
+@app.get("/api/auto-allocate/models/library", response_model=Dict)
+async def get_model_library():
+    """
+    获取可用模型库列表
+
+    Returns:
+        {
+            "models": [
+                {
+                    "id": "qwen3-4b",
+                    "name": "Qwen3-4B",
+                    "size_gb": 3.9,
+                    "params": 4,
+                    "layers": 36,
+                    "category": "general",
+                    "priority": 1.0
+                },
+                ...
+            ],
+            "categories": ["general", "code", "math", "reasoning"],
+            "total": 15
+        }
+    """
+    models = []
+    categories = set()
+
+    for model_id, spec in MODEL_LIBRARY.items():
+        categories.add(spec.category)
+        models.append({
+            "id": model_id,
+            "name": spec.pretty_name,
+            "size_gb": round(spec.total_memory_gb, 1),
+            "params": spec.param_count,
+            "layers": spec.total_layers,
+            "layer_memory_mb": spec.layer_memory_mb,
+            "category": spec.category,
+            "context_length": spec.context_length,
+            "priority": spec.priority
+        })
+
+    # 按参数量排序
+    models.sort(key=lambda x: x["params"])
+
+    return {
+        "success": True,
+        "data": {
+            "models": models,
+            "categories": sorted(list(categories)),
+            "total": len(models)
+        }
+    }
+
+
+@app.post("/api/auto-allocate/models/custom", response_model=Dict)
+async def add_custom_model(request: Dict[str, Any] = Body(...)):
+    """
+    添加自定义模型到库中
+
+    Request Body:
+    {
+        "model_id": "my-custom-model",
+        "pretty_name": "My Custom Model",
+        "total_layers": 40,
+        "layer_memory_mb": 200,
+        "param_count": 8,
+        "context_length": 8192,
+        "category": "general",
+        "priority": 1.0
+    }
+    """
+    try:
+        allocator = get_auto_allocator()
+
+        required_fields = ["model_id", "pretty_name", "total_layers"]
+        for field in required_fields:
+            if field not in request or not request[field]:
+                raise HTTPException(status_code=400, detail=f"缺少必填字段: {field}")
+
+        spec = ModelSpec(
+            model_id=request["model_id"],
+            pretty_name=request["pretty_name"],
+            total_layers=int(request["total_layers"]),
+            layer_memory_mb=float(request.get("layer_memory_mb", 100)),
+            param_count=float(request.get("param_count", 0)),
+            context_length=int(request.get("context_length", 8192)),
+            category=request.get("category", "general"),
+            priority=float(request.get("priority", 1.0))
+        )
+
+        allocator.add_custom_model(spec)
+
+        logger.info(f"[AutoAlloc] ➕ 自定义模型已添加: {spec.pretty_name}")
+
+        return {
+            "success": True,
+            "message": f"模型 '{spec.pretty_name}' 已添加到库中",
+            "data": {
+                "model_id": spec.model_id,
+                "name": spec.pretty_name,
+                "size_gb": round(spec.total_memory_gb, 1)
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AutoAlloc] 添加自定义模型失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/auto-allocate/models/{model_id}", response_model=Dict)
+async def remove_custom_model(model_id: str):
+    """从模型库移除模型"""
+    try:
+        allocator = get_auto_allocator()
+
+        if model_id not in MODEL_LIBRARY:
+            raise HTTPException(status_code=404, detail=f"模型不存在: {model_id}")
+
+        allocator.remove_model(model_id)
+
+        logger.info(f"[AutoAlloc] ➖ 模型已移除: {model_id}")
+
+        return {
+            "success": True,
+            "message": f"模型 '{model_id}' 已从库中移除"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[AutoAlloc] 移除模型失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auto-allocate/strategies", response_model=Dict)
+async def get_available_strategies():
+    """
+    获取所有可用的分配策略
+
+    Returns:
+        {
+            "strategies": [
+                {
+                    "id": "maximize_utilization",
+                    "name": "最大化利用率",
+                    "description": "优先选择参数密度高的模型，最大化显存利用效率",
+                    "recommended": true
+                },
+                ...
+            ]
+        }
+    """
+    strategies_info = {
+        AllocationStrategy.MAXIMIZE_UTILIZATION: {
+            "name": "最大化利用率",
+            "description": "优先选择参数密度高的模型，最大化显存利用效率（推荐）",
+            "recommended": True
+        },
+        AllocationStrategy.MAXIMIZE_DIVERSITY: {
+            "name": "最大化多样性",
+            "description": "每个类别选择代表模型，提供更丰富的服务类型"
+        },
+        AllocationStrategy.PRIORITIZE_LARGE: {
+            "name": "优先大模型",
+            "description": "优先加载大型模型，追求最强推理能力"
+        },
+        AllocationStrategy.BALANCED: {
+            "name": "平衡策略",
+            "description": "综合考虑模型大小、多样性和优先级"
+        },
+        AllocationStrategy.CUSTOM: {
+            "name": "自定义顺序",
+            "description": "按用户指定的优先级列表顺序分配"
+        },
+    }
+
+    strategies = []
+    for strategy, info in strategies_info.items():
+        strategies.append({
+            "id": strategy.value,
+            "name": info["name"],
+            "description": info["description"],
+            "recommended": info.get("recommended", False)
+        })
+
+    return {
+        "success": True,
+        "data": {
+            "strategies": strategies,
+            "default": AllocationStrategy.MAXIMIZE_UTILIZATION.value
+        }
+    }
+
+
+# ==================== 节点稳定性管理 API ====================
+
+@app.get("/api/stability/report", response_model=Dict)
+async def get_stability_report(node_id: Optional[str] = None):
+    """
+    获取节点稳定性报告
+
+    Query Params:
+        node_id: 可选，指定节点ID（不传则返回所有节点）
+
+    Returns:
+        {
+            "timestamp": 1234567890,
+            "total_nodes_tracked": 5,
+            "nodes": {
+                "node-1": {
+                    "stability_status": "stable",
+                    "confidence": 95.2,
+                    "health_score": 98,
+                    "flap_count_5min": 0,
+                    "flap_count_1hour": 1,
+                    ...
+                }
+            },
+            "summary": {
+                "stable_nodes": 4,
+                "flapping_nodes": 1,
+                "offline_nodes": 0,
+                "unstable_nodes": 0
+            }
+        }
+    """
+    try:
+        resilient = get_resilient_allocator()
+        report = resilient.stability_mgr.get_node_stability_report(node_id)
+        return {
+            "success": True,
+            "data": report
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Stability] 获取稳定性报告失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/stability/event", response_model=Dict)
+async def report_node_event(request: Dict[str, Any] = Body(...)):
+    """
+    上报节点状态变化事件
+
+    Request Body:
+    {
+        "node_id": "worker-1",
+        "event_type": "offline",          # online | offline | error | flapping
+        "loaded_models": ["model1"],       # 可选，当前加载的模型列表
+        "auto_execute_recovery": false     # 可选，是否自动执行故障恢复
+    }
+
+    Returns:
+        处理结果和建议动作
+    """
+    try:
+        resilient = get_resilient_allocator()
+
+        node_id = request.get("node_id")
+        event_type = request.get("event_type")
+
+        if not node_id or not event_type:
+            raise HTTPException(status_code=400, detail="必须提供 node_id 和 event_type")
+
+        result = await resilient.on_node_event(
+            node_id=node_id,
+            event_type=event_type,
+            loaded_models=request.get("loaded_models"),
+            auto_execute=request.get("auto_execute_recovery", False)
+        )
+
+        logger.info(f"[Stability] 📥 事件处理完成: {node_id}/{event_type} → "
+                   f"{result['stability']['stability_status']}")
+
+        return {
+            "success": True,
+            "data": result
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Stability] 处理节点事件失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stability/should-reallocate/{node_id}", response_model=Dict)
+async def check_should_reallocate(node_id: str):
+    """
+    检查是否应该对指定节点触发重分配
+
+    Args:
+        node_id: 节点ID
+
+    Returns:
+        {
+            "should_reallocate": true/false,
+            "reason": "原因说明",
+            "current_status": "confirmed_offline"
+        }
+    """
+    try:
+        resilient = get_resilient_allocator()
+        should, reason = resilient.stability_mgr.should_trigger_reallocation(node_id)
+
+        record = resilient.stability_mgr.records.get(node_id)
+
+        return {
+            "success": True,
+            "data": {
+                "node_id": node_id,
+                "should_reallocate": should,
+                "reason": reason,
+                "current_status": record.stability_status.value if record else "unknown",
+                "in_cooldown": record.in_cooldown if record else False,
+                "flap_count_recent": record.flap_count_5min if record else 0
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Stability] 检查重分配条件失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 故障恢复 API ====================
+
+@app.post("/api/recovery/handle-failure/{node_id}", response_model=Dict)
+async def handle_node_failure(node_id: str, auto_execute: bool = False):
+    """
+    处理节点故障并生成恢复计划
+
+    Args:
+        node_id: 故障节点ID
+        auto_execute: 是否自动执行恢复（默认false）
+
+    Returns:
+        恢复计划详情
+    """
+    try:
+        resilient = get_resilient_allocator()
+
+        logger.warning(f"[Recovery] 🚨 手动触发故障处理: {node_id}")
+
+        recovery_plan = await resilient.recovery_mgr.handle_node_failure(node_id)
+
+        if auto_execute and recovery_plan["action"] == "plan_generated":
+            exec_result = await resilient.recovery_mgr.execute_recovery_plan(node_id)
+            recovery_plan["execution_result"] = exec_result
+
+        return {
+            "success": True,
+            "data": recovery_plan,
+            "message": f"已生成恢复计划: {recovery_plan['summary']['will_migrate']}个迁移, "
+                      f"{recovery_plan['summary']['will_degrade']}个降级"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Recovery] 故障处理失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/recovery/history", response_model=Dict)
+async def get_recovery_history(limit: int = 20):
+    """获取故障恢复历史记录"""
+    try:
+        resilient = get_resilient_allocator()
+
+        history = resilient.recovery_mgr.recovery_history[-limit:]
+
+        return {
+            "success": True,
+            "data": {
+                "history": history,
+                "total": len(resilient.recovery_mgr.recovery_history),
+                "showing": len(history)
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Recovery] 获取历史失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/recovery/active", response_model=Dict)
+async def get_active_recoveries():
+    """获取当前正在进行的恢复任务"""
+    try:
+        resilient = get_resilient_allocator()
+
+        active = {}
+        for node_id, actions in resilient.recovery_mgr.active_recoveries.items():
+            active[node_id] = [
+                {
+                    "model_id": a.model_id,
+                    "action_type": a.action_type,
+                    "priority": a.priority,
+                    "target_node": a.target_node
+                }
+                for a in actions
+            ]
+
+        return {
+            "success": True,
+            "data": {
+                "active_recoveries": active,
+                "count": len(active)
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Recovery] 获取活跃恢复失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 方案版本管理 API ====================
+
+@app.get("/api/plans/versions", response_model=Dict)
+async def list_allocation_versions(limit: int = 10):
+    """
+    列出分配方案版本历史
+
+    Query Params:
+        limit: 返回数量限制（默认10）
+
+    Returns:
+        版本列表
+    """
+    try:
+        resilient = get_resilient_allocator()
+        versions = resilient.plan_mgr.list_versions(limit)
+
+        return {
+            "success": True,
+            "data": {
+                "versions": versions,
+                "current_version": resilient.plan_mgr.current_version_id,
+                "total_versions": len(resilient.plan_mgr.versions)
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PlanMgr] 获取版本列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/plans/compare", response_model=Dict)
+async def compare_plan_versions(
+    version1: str,
+    version2: Optional[str] = None
+):
+    """
+    对比两个分配方案版本的差异
+
+    Query Params:
+        version1: 第一个版本ID
+        version2: 第二个版本ID（可选，默认与当前版本对比）
+
+    Returns:
+        差异详情
+    """
+    try:
+        resilient = get_resilient_allocator()
+
+        if not version2:
+            version2 = resilient.plan_mgr.current_version_id
+            if not version2:
+                raise HTTPException(status_code=404, detail="无当前激活版本")
+
+        diff = resilient.plan_mgr.compare_versions(version1, version2)
+
+        return {
+            "success": True,
+            "data": diff
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[PlanMgr] 版本对比失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/plans/rollback/{version_id}", response_model=Dict)
+async def rollback_to_version(version_id: str):
+    """
+    回滚到指定的方案版本
+
+    Args:
+        version_id: 目标版本ID
+
+    Returns:
+        回滚结果
+    """
+    try:
+        resilient = get_resilient_allocator()
+
+        # 先检查是否可以回滚
+        can_rollback, reason = resilient.plan_mgr.can_rollback_to(version_id)
+        if not can_rollback:
+            raise HTTPException(status_code=400, detail=f"无法回滚: {reason}")
+
+        # 执行回滚
+        plan = resilient.plan_mgr.rollback_to(version_id)
+
+        logger.warning(f"[PlanMgr] ⏪ 方案回滚完成: {version_id}")
+
+        return {
+            "success": True,
+            "message": f"已成功回滚到版本 {version_id}",
+            "data": {
+                "rolled_back_to": version_id,
+                "new_current_version": resilient.plan_mgr.current_version_id,
+                "plan_summary": {
+                    "total_models": plan.total_models,
+                    "performance_score": plan.performance_score,
+                    "memory_utilization": plan.memory_utilization * 100
+                } if plan else None
+            }
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[PlanMgr] 回滚失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 弹性分配综合 API ====================
+
+@app.get("/api/resilient/dashboard", response_model=Dict)
+async def get_resilient_dashboard():
+    """
+    获取弹性分配仪表板数据（整合所有信息）
+
+    Returns:
+        综合仪表板数据，包括：
+        - 稳定性状态
+        - 最近方案版本
+        - 恢复历史
+        - 分配器状态
+    """
+    try:
+        resilient = get_resilient_allocator()
+        dashboard_data = resilient.get_dashboard_data()
+
+        return {
+            "success": True,
+            "data": dashboard_data,
+            "timestamp": time.time()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Resilient] 获取仪表板数据失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/resilient/safe-plan", response_model=Dict)
+async def generate_safe_plan(request: Dict[str, Any] = Body(...)):
+    """
+    安全生成分配方案（带稳定性检查）
+
+    与普通 /api/auto-allocate/preview 的区别：
+    - 会检查是否有不稳定节点
+    - 不稳定时会发出警告但仍会生成方案
+    - 自动保存到版本历史中
+
+    Request Body:
+    {
+        "strategy": "balanced",
+        "force": false,              // 强制跳过安全检查
+        "exclude_models": [...],
+        "force_include": [...]
+    }
+    """
+    try:
+        resilient = get_resilient_allocator()
+
+        strategy = request.get("strategy", "maximize_utilization")
+        force = request.get("force", False)
+
+        plan, version_id = await resilient.safe_generate_plan(
+            strategy=strategy,
+            force=force,
+            exclude_models=request.get("exclude_models"),
+            force_include=request.get("force_include")
+        )
+
+        # 获取稳定性警告
+        stability_warnings = []
+        if not force:
+            stability_report = resilient.stability_mgr.get_node_stability_report()
+            summary = stability_report.get("summary", {})
+            if summary.get("flapping_nodes", 0) > 0:
+                stability_warnings.append(
+                    f"检测到 {summary['flapping_nodes']} 个抖动节点，方案可能需要调整"
+                )
+            if summary.get("unstable_nodes", 0) > 0:
+                stability_warnings.append(
+                    f"⚠️ 检测到 {summary['unstable_nodes']} 个极不稳定节点"
+                )
+
+        return {
+            "success": True,
+            "data": {
+                "plan": plan.to_dict(),
+                "version_id": version_id,
+                "stability_warnings": stability_warnings,
+                "is_safe_generation": not force
+            },
+            "warnings": stability_warnings,
+            "message": f"安全方案已生成 (版本: {version_id})" + (
+                f"，包含{len(stability_warnings)}条稳定性警告" if stability_warnings else ""
+            )
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[Resilient] 安全方案生成失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 主备冗余（HA）分配 API ====================
+
+@app.post("/api/ha/generate-plan", response_model=Dict)
+async def generate_ha_plan(request: Dict[str, Any] = Body(...)):
+    """
+    生成高可用（主备冗余）分配方案
+
+    与普通分配的核心区别：
+    ✅ 每个关键模型至少2个副本（主+备）
+    ✅ 避免单点故障（Anti-SPOF）
+    ✅ 自动选择异构节点作为备份
+    ✅ 内置健康检查和故障转移能力
+
+    Request Body:
+    {
+        "mode": "active_passive",              // 冗余模式
+        "min_replicas_critical": 2,            // 关键模型最少副本数
+        "min_replicas_normal": 1,              // 普通模型最少副本数
+        "max_single_node_ratio": 0.4,          // 单节点承载上限(40%)
+        "exclude_models": [...],
+        "force_include": ["qwen3-8b"],
+        "prioritize_redundancy": true           // 优先保证冗余
+    }
+
+    Returns:
+        完整的HA分配方案，包括：
+        - 每个模型的主/备实例分布
+        - SPOF风险评估
+        - 可用性预估（如99.99%）
+        - 故障转移配置
+    """
+    try:
+        ha = get_ha_allocator()
+
+        # 解析参数
+        mode_str = request.get("mode", "active_passive")
+        try:
+            mode = RedundancyMode(mode_str)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效的冗余模式: {mode_str}，可选: active_passive, active_active"
+            )
+
+        # 生成HA方案
+        plan = ha.generate_ha_plan(
+            mode=mode,
+            min_replicas_critical=request.get("min_replicas_critical", 2),
+            min_replicas_normal=request.get("min_replicas_normal", 1),
+            max_single_node_ratio=request.get("max_single_node_ratio", 0.4),
+            exclude_models=request.get("exclude_models"),
+            force_include=request.get("force_include"),
+            prioritize_redundancy=request.get("prioritize_redundancy", True)
+        )
+
+        logger.info(f"[HAAlloc] 🎯 HA方案生成完成: "
+                   f"{plan.total_models}个模型, "
+                   f"{plan.total_instances}个实例, "
+                   f"平均冗余{plan.avg_redundancy:.2f}x, "
+                   f"SPOF风险{plan.spof_risk_score:.1f}/100, "
+                   f"可用性{plan.estimated_availability*100:.2f}%")
+
+        return {
+            "success": True,
+            "data": plan.to_dict(),
+            "message": f"✅ HA方案已生成: {plan.total_models}个模型, "
+                      f"{plan.total_instances}个实例(含{len([m for m in plan.vulnerable_models])}个无备份), "
+                      f"预估可用性{plan.estimated_availability*100:.2f}%"
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[HAAlloc] HA方案生成失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"生成HA方案失败: {str(e)}")
+
+
+@app.get("/api/ha/health-status", response_model=Dict)
+async def get_ha_health_status():
+    """
+    获取HA系统整体健康状态
+
+    Returns:
+        {
+            "overall_status": "healthy" | "degraded" | "unhealthy",
+            "health_percentage": 98.5,
+            "instances": {"total": 10, "healthy": 9, "degraded": 1, ...},
+            "models_with_issues": ["model_id"]
+        }
+    """
+    try:
+        ha = get_ha_allocator()
+        health = ha.get_health_status()
+
+        return {
+            "success": True,
+            "data": health,
+            "timestamp": time.time()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[HAAlloc] 获取健康状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ha/health-check", response_model=Dict)
+async def trigger_health_check():
+    """
+    手动触发一轮健康检查
+
+    Returns:
+        所有实例的检查结果列表
+    """
+    try:
+        ha = get_ha_allocator()
+
+        results = await ha.perform_health_check()
+
+        summary = {
+            "total_checked": len(results),
+            "healthy": sum(1 for r in results if r.status == InstanceStatus.HEALTHY),
+            "degraded": sum(1 for r in results if r.status == InstanceStatus.DEGRADED),
+            "unhealthy": sum(1 for r in results if r.status == InstanceStatus.UNHEALTHY),
+            "down": sum(1 for r in results if r.status == InstanceStatus.DOWN),
+        }
+
+        logger.info(f"[HAAlloc] 🩺 健康检查完成: "
+                   f"{summary['total_checked']}个实例, "
+                   f"✅{summary['healthy']} ⚠️{summary['degraded']} ❌{summary['unhealthy']} 💀{summary['down']}")
+
+        return {
+            "success": True,
+            "data": {
+                "results": [
+                    {
+                        "model_id": r.model_id,
+                        "instance_id": r.instance_id,
+                        "node_id": r.node_id,
+                        "status": r.status.value,
+                        "latency_ms": round(r.latency_ms, 1),
+                        "error": r.error,
+                    }
+                    for r in results
+                ],
+                "summary": summary,
+                "timestamp": time.time()
+            },
+            "message": f"检查完成: {summary['healthy']}/{summary['total_checked']} 健康"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[HAAlloc] 健康检查失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/ha/failover/{model_id}", response_model=Dict)
+async def execute_failover(
+    model_id: str,
+    failed_node: str = Body(..., embed=True),
+    auto_promote: bool = True
+):
+    """
+    执行故障转移（手动或自动触发）
+
+    当某个节点的模型实例发生故障时：
+    1. 将该实例标记为宕机
+    2. 自动查找并提升备用实例为主实例
+    3. 更新路由表，将流量导向新主实例
+    4. 记录完整的转移日志
+
+    Args:
+        model_id: 发生故障的模型ID
+        failed_node: 故障节点ID
+        auto_promote: 是否自动提升备用实例
+
+    Returns:
+        转移结果和详情
+    """
+    try:
+        ha = get_ha_allocator()
+
+        logger.warning(f"[HAAlloc] 🚨 手动触发故障转移: "
+                      f"模型={model_id}, 节点={failed_node}")
+
+        record = await ha.failover(
+            model_id=model_id,
+            failed_node=failed_node,
+            auto_promote=auto_promote
+        )
+
+        status = "✅ 成功" if record.success else "❌ 失败"
+        logger.info(f"[HAAlloc] 故障转移{status}: "
+                   f"{record.failed_node} → {record.promoted_node or '无可用备'}, "
+                   f"耗时{record.duration_ms:.0f}ms")
+
+        return {
+            "success": record.success,
+            "data": {
+                "record_id": record.record_id,
+                "model_id": record.model_id,
+                "failed_instance": record.failed_instance,
+                "failed_node": record.failed_node,
+                "promoted_instance": record.promoted_instance,
+                "promoted_node": record.promoted_node,
+                "state": record.failover_state.value,
+                "duration_ms": round(record.duration_ms, 1),
+                "requests_lost": record.requests_lost,
+            },
+            "message": f"故障转移{status}: {failed_node} → {record.promoted_node or '无备'}"
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[HAAlloc] 故障转移失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"故障转移失败: {str(e)}")
+
+
+@app.post("/api/ha/recover-node/{node_id}", response_model=Dict)
+async def recover_failed_node(node_id: str):
+    """
+    恢复故障节点
+
+    当一个之前掉线的节点重新上线时调用：
+    1. 标记该节点上的所有实例为恢复中
+    2. 对于已经故障转移过的模型：降恢复后的实例为备用
+    3. 更新系统状态
+
+    Args:
+        node_id: 恢复的节点ID
+
+    Returns:
+        恢复操作详情
+    """
+    try:
+        ha = get_ha_allocator()
+
+        result = await ha.recover_node(node_id)
+
+        logger.info(f"[HAAlloc] 🔄 节点恢复: {node_id}, "
+                   f"{len(result['recovered_instances'])}个实例恢复, "
+                   f"{len(result['re_demoted'])}个降为备用")
+
+        return {
+            "success": True,
+            "data": result,
+            "message": f"节点 {node_id} 已恢复: "
+                      f"{len(result['recovered_instances'])}实例就绪"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[HAAlloc] 节点恢复处理失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ha/failover-history", response_model=Dict)
+async def get_failover_history(limit: int = 20):
+    """获取故障转移历史记录"""
+    try:
+        ha = get_ha_allocator()
+        history = ha.get_failover_history(limit)
+
+        return {
+            "success": True,
+            "data": {
+                "history": history,
+                "total": len(ha.failover_records),
+                "showing": len(history)
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[HAAlloc] 获取转移历史失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ha/modes", response_model=Dict)
+async def get_available_ha_modes():
+    """
+    获取可用的HA冗余模式
+
+    Returns:
+        模式列表及说明
+    """
+    modes_info = {
+        RedundancyMode.ACTIVE_PASSIVE: {
+            "name": "主备热备 (Active-Passive)",
+            "description": "推荐模式。1个活跃主实例 + 1个热备实例。主故障时备秒级接管，有短暂中断(<5秒)",
+            "use_cases": ["生产环境", "高可用优先", "资源有限时"],
+            "redundancy_level": "N+1",
+            "rto_seconds": "< 5",
+            "availability": "~99.99%",
+            "recommended": True
+        },
+        RedundancyMode.ACTIVE_ACTIVE: {
+            "name": "双活负载均衡 (Active-Active)",
+            "description": "2个实例同时服务请求，负载自动分散。任一故障无感知切换",
+            "use_cases": ["高性能场景", "零停机要求", "资源充足时"],
+            "redundancy_level": "N+N",
+            "rto_seconds": "< 1",
+            "availability": "~99.999%",
+            "recommended": False
+        },
+        RedundancyMode.N_PLUS_M: {
+            "name": "N+M 冗余",
+            "description": "N个活跃实例 + M个备用实例。适用于大规模集群和多级容灾",
+            "use_cases": ["超大规模部署", "多机房容灾", "企业级高可用"],
+            "redundancy_level": "N+M (可配置)",
+            "rto_seconds": "< 3",
+            "availability": "~99.9999%",
+            "recommended": False
+        },
+    }
+
+    modes = []
+    for mode, info in modes_info.items():
+        modes.append({
+            "id": mode.value,
+            "name": info["name"],
+            "description": info["description"],
+            "use_cases": info["use_cases"],
+            "redundancy_level": info["redundancy_level"],
+            "rto_seconds": info["rto_seconds"],
+            "availability": info["availability"],
+            "recommended": info.get("recommended", False)
+        })
+
+    return {
+        "success": True,
+        "data": {
+            "modes": modes,
+            "default": RedundancyMode.ACTIVE_PASSIVE.value,
+            "configuration": {
+                "health_check_interval_sec": HAModelAllocator.HEALTH_CHECK_INTERVAL,
+                "failover_timeout_ms": HAModelAllocator.FAILOVER_TIMEOUT_MS,
+                "heartbeat_timeout_sec": HAModelAllocator.HEARTBEAT_TIMEOUT_SECONDS,
+            }
+        }
+    }
+
+
+# ============================================================
+#  自动分配触发器 API
+# ============================================================
+
+@app.get("/api/auto-trigger/status", response_model=Dict)
+async def get_auto_trigger_status():
+    """
+    获取自动分配触发器的状态
+
+    Returns:
+        触发器运行状态、配置参数、最近事件等
+    """
+    trigger = get_auto_trigger()
+    status = trigger.get_status()
+
+    return {
+        "success": True,
+        "data": status,
+        "message": "自动分配触发器状态"
+    }
+
+
+@app.get("/api/auto-trigger/history", response_model=Dict)
+async def get_auto_trigger_history(limit: int = Query(20, ge=1, le=100)):
+    """
+    获取自动分配历史记录
+
+    Args:
+        limit: 返回的最大条数（1-100）
+
+    Returns:
+        最近的事件列表
+    """
+    trigger = get_auto_trigger()
+    history = trigger.get_history(limit=limit)
+
+    return {
+        "success": True,
+        "data": {
+            "history": history,
+            "total_events": len(trigger.event_history),
+            "limit": limit
+        },
+        "message": f"最近 {min(len(history), limit)} 条分配事件"
+    }
+
+
+@app.post("/api/auto-trigger/trigger", response_model=Dict)
+async def manual_trigger_allocation(
+    reason: str = Query("用户手动触发", description="触发原因"),
+    force: bool = Query(True, description="是否强制执行")
+):
+    """
+    手动触发一次自动分配评估和执行
+
+    可以用于：
+    - 紧急情况下的立即重分配
+    - 测试自动分配功能
+    - 在节点变化后手动触发优化
+
+    Args:
+        reason: 触发原因描述
+        force: 是否强制执行（跳过冷却期检查）
+
+    Returns:
+        分配事件的完整信息
+    """
+    trigger = get_auto_trigger()
+
+    event = await trigger.manual_trigger(reason=reason, force=force)
+
+    return {
+        "success": event.execution_success or event.decision == "defer",
+        "data": event.to_dict(),
+        "message": (
+            f"✅ 分配成功：{event.models_allocated}/{event.models_total} 个模型"
+            if event.execution_success else
+            (f"⏭️ 已跳过：{event.skip_reason}" if event.decision == "skip" else
+             f"❌ 执行失败：{event.error}")
+        )
+    }
+
+
+@app.post("/api/auto-trigger/configure", response_model=Dict)
+async def configure_auto_trigger(
+    enabled: Optional[bool] = Body(None, description="是否启用"),
+    strategy: Optional[str] = Body(None, description="分配策略"),
+    auto_execute: Optional[bool] = Body(None, description="是否自动执行方案"),
+    cooldown_seconds: Optional[int] = Body(None, description="冷却期(秒)"),
+    min_online_nodes: Optional[int] = Body(None, description="最小在线节点数")
+):
+    """
+    配置自动分配触发器参数
+
+    可以动态调整触发器的行为，无需重启服务
+
+    Args:
+        enabled: 是否启用自动分配
+        strategy: 分配策略 (active_passive / active_active / n_plus_m)
+        auto_execute: 是否自动执行生成的方案
+        cooldown_seconds: 冷却期时长（秒）
+        min_online_nodes: 最少需要几个在线节点才触发
+
+    Returns:
+        更新后的配置
+    """
+    trigger = get_auto_trigger()
+    config = trigger.config
+
+    updates = []
+
+    if enabled is not None:
+        config.ENABLED = enabled
+        updates.append(f"启用={enabled}")
+
+    if strategy is not None:
+        valid_strategies = ["active_passive", "active_active", "n_plus_m"]
+        if strategy not in valid_strategies:
+            raise HTTPException(
+                status_code=400,
+                detail=f"无效策略，可选值: {valid_strategies}"
+            )
+        config.DEFAULT_STRATEGY = strategy
+        updates.append(f"策略={strategy}")
+
+    if auto_execute is not None:
+        config.AUTO_EXECUTE = auto_execute
+        updates.append(f"自动执行={auto_execute}")
+
+    if cooldown_seconds is not None:
+        if cooldown_seconds < 30:
+            raise HTTPException(status_code=400, detail="冷却期不能小于30秒")
+        config.COOLDOWN_SECONDS = cooldown_seconds
+        updates.append(f"冷却期={cooldown_seconds}s")
+
+    if min_online_nodes is not None:
+        if min_online_nodes < 1:
+            raise HTTPException(status_code=400, detail="最小在线节点数不能小于1")
+        config.MIN_ONLINE_NODES = min_online_nodes
+        updates.append(f"最小节点数={min_online_nodes}")
+
+    logger.info(f"[AutoTrigger] ⚙️ 配置已更新: {', '.join(updates)}")
+
+    # 如果从禁用变为启用，启动触发器
+    if enabled and not trigger._is_running:
+        asyncio.create_task(trigger.start())
+
+    # 如果从启用变为禁用，停止触发器
+    if enabled is False and trigger._is_running:
+        await trigger.stop()
+
+    return {
+        "success": True,
+        "data": {
+            "updated_fields": updates,
+            "current_config": {
+                "enabled": config.ENABLED,
+                "strategy": config.DEFAULT_STRATEGY,
+                "auto_execute": config.AUTO_EXECUTE,
+                "cooldown_seconds": config.COOLDOWN_SECONDS,
+                "min_online_nodes": config.MIN_ONLINE_NODES,
+            }
+        },
+        "message": f"配置已更新: {', '.join(updates)}"
+    }
 
 
 @app.get("/register", response_class=HTMLResponse)

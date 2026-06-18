@@ -147,13 +147,43 @@ class NodeConnector:
         self._manager_ref = manager  # 用于备用数据源查询
         
     async def connect(self) -> bool:
-        """建立gRPC连接并获取设备信息"""
+        """建立gRPC连接并获取设备信息（含轻量安全检查）"""
         try:
             import grpc
-            
+
+            # 检查 grpc.aio 是否可用（旧版 grpcio 不支持异步）
+            if not hasattr(grpc, 'aio'):
+                logger.warning(f"⚠️ grpc.aio 不可用 (grpcio版本过旧)，跳过gRPC连接，依赖WebSocket通信")
+                logger.warning(f"   请升级: pip install 'grpcio>=1.60.0'")
+                self.node_info.status = NodeStatus.ONLINE  # WebSocket已通，标记为在线
+                return False
+
             address = f"{self.node_info.address}:{self.node_info.port}"
             logger.info(f"🔌 正在连接节点 {self.node_info.node_id} @ {address}...")
-            
+
+            # ==================== 轻量安全检查 (~0.02ms) ====================
+            try:
+                from node_security import get_security_manager
+                security = get_security_manager()
+
+                # 快速检查 (仅黑白名单+封禁+速率限制)
+                result = await security.check(
+                    ip=self.node_info.address,
+                    node_id=self.node_info.node_id
+                )
+
+                if not result.allowed:
+                    self.node_info.status = NodeStatus.ERROR
+                    self.node_info.error_message = f"安全检查未通过: {result.reason}"
+                    logger.warning(f"🛡️ 节点 {self.node_info.node_id} 连接被拒绝: {result.reason}")
+                    return False
+
+            except ImportError:
+                pass  # 安全模块可选, 不影响主流程
+            except Exception as e:
+                logger.debug(f"安全检查异常(允许): {e}")
+
+            # ==================== 建立gRPC连接 ====================
             self.channel = grpc.aio.insecure_channel(
                 address,
                 options=[
@@ -166,8 +196,8 @@ class NodeConnector:
             
             # 尝试导入gRPC stub
             try:
-                from node_service_pb2_grpc import NodeServiceStub
-                from node_service_pb2 import CollectTopologyRequest
+                from proto.node_service_pb2_grpc import NodeServiceStub
+                from proto.node_service_pb2 import CollectTopologyRequest
                 self.stub = NodeServiceStub(self.channel)
             except ImportError:
                 logger.warning(f"无法导入gRPC stub，使用简化模式")
@@ -207,7 +237,7 @@ class NodeConnector:
         
         try:
             import sys
-            from node_service_pb2 import CollectTopologyRequest
+            from proto.node_service_pb2 import CollectTopologyRequest
             
             request = CollectTopologyRequest(max_depth=0, visited=[])
             response = await asyncio.wait_for(
@@ -320,7 +350,7 @@ class NodeConnector:
         
         try:
             import sys
-            from node_service_pb2 import CollectTopologyRequest
+            from proto.node_service_pb2 import CollectTopologyRequest
             
             request = CollectTopologyRequest(max_depth=0, visited=[])
             response = await asyncio.wait_for(
@@ -513,7 +543,7 @@ class NodeConnector:
             
             # 使用正确的 protobuf 请求类型
             try:
-                from node_service_pb2 import HealthCheckRequest
+                from proto.node_service_pb2 import HealthCheckRequest
                 request = HealthCheckRequest()
             except ImportError:
                 # 如果无法导入，使用空字典作为fallback（某些gRPC版本支持）
@@ -629,7 +659,7 @@ class NodeConnector:
         """通过 gRPC SendOpaqueStatus 发送分片配置"""
         try:
             import sys
-            from node_service_pb2 import SendOpaqueStatusRequest
+            from proto.node_service_pb2 import SendOpaqueStatusRequest
             
             shard_config = json.dumps({
                 **shard_payload,
@@ -743,7 +773,7 @@ class NodeConnector:
 
         try:
             import sys
-            from node_service_pb2 import SendOpaqueStatusRequest
+            from proto.node_service_pb2 import SendOpaqueStatusRequest
 
             unload_command = json.dumps({
                 "type": "manager_unload_model",
@@ -1568,34 +1598,51 @@ class EXOClusterManager:
         connector = self.connectors.get(node_id)
         if not connector:
             return
-        
+
+        _grpc_aio_unavailable = False  # 标记：grpc.aio 不可用时停止重试
+
         for attempt in range(1, max_retries + 1):
             await asyncio.sleep(interval)
-            
+
             if node_id not in self.nodes:
                 logger.info(f"[RetryConnect] 节点 {node_id} 已被移除，停止重试")
                 return
-            
+
+            # grpc.aio 永久性缺失，无需重试
+            if _grpc_aio_unavailable:
+                return
+
             try:
                 logger.info(f"[RetryConnect] 重试连接 {node_id} ({attempt}/{max_retries})...")
-                
+
                 if connector.channel:
                     try:
                         await connector.channel.close()
                     except Exception:
                         pass
-                
+
                 success = await connector.connect()
-                
+
                 if success:
                     logger.info(f"✅ [RetryConnect] 节点 {node_id} 连接成功!")
                     return
                 else:
+                    # 检查是否因 grpc.aio 缺失导致失败
+                    err_msg = connector.node_info.error_message or ""
+                    if "grpc.aio" in err_msg or "has no attribute" in err_msg:
+                        logger.warning(f"[RetryConnect] grpc.aio 不可用，停止重试 (依赖WebSocket通信)")
+                        _grpc_aio_unavailable = True
+                        return
                     logger.warning(f"[RetryConnect] 节点 {node_id} 第{attempt}次重试失败")
-                    
+
             except Exception as e:
+                err_str = str(e)
                 logger.error(f"[RetryConnect] 节点 {node_id} 重试异常: {e}")
-        
+                if "grpc" in err_str and "aio" in err_str:
+                    logger.warning(f"[RetryConnect] grpc.aio 不可用，停止重试")
+                    _grpc_aio_unavailable = True
+                    return
+
         logger.error(f"[RetryConnect] 节点 {node_id} 重试{max_retries}次后仍失败")
     
     async def _monitor_loop(self):

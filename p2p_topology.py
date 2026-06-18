@@ -283,7 +283,7 @@ class P2PTopologyManager:
             
             # 导入正确的 protobuf 消息类型
             try:
-                from node_service_pb2 import CollectTopologyRequest
+                from proto.node_service_pb2 import CollectTopologyRequest
             except ImportError:
                 logger.debug(f"无法导入 CollectTopologyRequest protobuf 类型")
                 return await self._collect_via_status(connector)
@@ -340,7 +340,7 @@ class P2PTopologyManager:
             # 发送请求（如果支持的话）
             if hasattr(connector.stub, 'SendOpaqueStatus'):
                 try:
-                    from node_service_pb2 import OpaqueStatusRequest
+                    from proto.node_service_pb2 import OpaqueStatusRequest
                     
                     request = OpaqueStatusRequest(
                         request_id=f"topo_{int(time.time())}",

@@ -49,5 +49,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/cluster/status')" || exit 1
 
-# 启动命令
-CMD ["python", "server.py", "--port", "8080"]
+# 启动命令 (使用 start_manager.py 支持完整功能)
+CMD ["python", "start_manager.py"]

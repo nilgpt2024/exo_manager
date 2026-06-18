@@ -65,6 +65,12 @@ services:
       # 调试模式 (生产必须关闭!)
       - EXO_DEBUG=${EXO_DEBUG:-false}
 
+      # FRP Server 配置 (内网穿透)
+      - EXO_FRP_ENABLE=${EXO_FRP_ENABLE:-false}
+      - EXO_FRP_BIND_PORT=${EXO_FRP_BIND_PORT:-7000}
+      - EXO_FRP_TOKEN=${EXO_FRP_TOKEN:-}
+      - EXO_FRP_DASHBOARD_PORT=${EXO_FRP_DASHBOARD_PORT:-0}
+
     # 数据卷挂载 (持久化数据)
     volumes:
       # 持久化数据目录 (用户数据、API Key、数据库等)

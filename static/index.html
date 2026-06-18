@@ -1448,6 +1448,23 @@
                 <i class="fas fa-scroll" style="margin-right: 6px;"></i>
                 系统日志
             </button>
+            <button id="mainTabSecurity" onclick="switchMainTab('security')"
+                    class="main-tab-btn"
+                    style="
+                        flex: 1;
+                        padding: 0.75rem 1.5rem;
+                        border: none;
+                        background: transparent;
+                        color: var(--gray-500);
+                        font-weight: 600;
+                        font-size: 0.92rem;
+                        cursor: pointer;
+                        border-radius: 8px;
+                        transition: all 0.25s ease;
+                    ">
+                <i class="fas fa-shield-alt" style="margin-right: 6px;"></i>
+                节点安全
+            </button>
         </div>
 
         <!-- Tab 1: 集群管理 -->
@@ -4188,6 +4205,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const webSocketTab = document.getElementById('mainTabWebSocket');
             const apiStatsTab = document.getElementById('mainTabApiStats');
             const logsTab = document.getElementById('mainTabLogs');
+            const securityTab = document.getElementById('mainTabSecurity');
             const clusterContent = document.getElementById('tabContentCluster');
             const inferenceContent = document.getElementById('tabContentInference');
             const apiKeyContent = document.getElementById('tabContentApiKey');
@@ -4196,9 +4214,10 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const webSocketContent = document.getElementById('tabContentWebSocket');
             const apiStatsContent = document.getElementById('tabContentApiStats');
             const logsContent = document.getElementById('tabContentLogs');
+            const securityContent = document.getElementById('tabContentSecurity');
 
             // 重置所有 tab
-            [clusterTab, inferenceTab, apiKeyTab, usersTab, modelTab, webSocketTab, apiStatsTab, logsTab].forEach(t => {
+            [clusterTab, inferenceTab, apiKeyTab, usersTab, modelTab, webSocketTab, apiStatsTab, logsTab, securityTab].forEach(t => {
                 if (t) {
                     t.classList.remove('active');
                     t.style.background = 'transparent';
@@ -4216,6 +4235,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             if (webSocketContent) webSocketContent.style.display = 'none';
             if (apiStatsContent) apiStatsContent.style.display = 'none';
             if (logsContent) logsContent.style.display = 'none';
+            if (securityContent) securityContent.style.display = 'none';
 
             // 激活选中 tab
             let activeTab = null;
@@ -4270,6 +4290,15 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 } else {
                     console.warn('[switchMainTab] fetchLogs 函数未定义');
                 }
+            } else if (tab === 'security') {
+                activeTab = securityTab;
+                activeContent = securityContent;
+                // 切到安全面板时自动加载数据
+                setTimeout(() => {
+                    if (typeof refreshSecurityStatus === 'function') {
+                        refreshSecurityStatus();
+                    }
+                }, 100);
             }
 
             if (activeTab) {
@@ -8169,6 +8198,557 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 }, 1000);
             });
         })();
+
+        // ==================== 🛡️ 节点安全防护面板 JavaScript ====================
+        const SecurityPanel = {
+            // API 基础路径
+            API_BASE: '/api/security',
+            
+            // 刷新安全状态
+            async refreshStatus() {
+                try {
+                    this.showLoading(true);
+                    
+                    // 获取安全状态
+                    const response = await fetch(`${this.API_BASE}/status`);
+                    const result = await response.json();
+                    
+                    if (result.success && result.data) {
+                        this.updateStats(result.data);
+                        this.updateBanList(result.data.bans || []);
+                        this.updateRiskList(result.data.risk_ips || []);
+                        this.updateTrustList(result.data.trusted_nodes || []);
+                    }
+                } catch (error) {
+                    console.error('[Security] 刷新状态失败:', error);
+                    this.showToast('获取安全状态失败', 'error');
+                } finally {
+                    this.showLoading(false);
+                }
+            },
+            
+            // 更新统计卡片
+            updateStats(data) {
+                const stats = {
+                    total_ips: data.total_tracked || 0,
+                    bans: data.active_bans || 0,
+                    risk: data.high_risk_ips || 0,
+                    trusted: data.trusted_count || 0
+                };
+                
+                // 更新卡片数值
+                const statCards = document.querySelectorAll('#securityStatsGrid .security-stat-card');
+                if (statCards.length >= 4) {
+                    statCards[0].querySelector('.security-stat-value').textContent = stats.total_ips;
+                    statCards[1].querySelector('.security-stat-value').textContent = stats.bans;
+                    statCards[2].querySelector('.security-stat-value').textContent = stats.risk;
+                    statCards[3].querySelector('.security-stat-value').textContent = stats.trusted;
+                }
+                
+                // 更新徽章
+                document.getElementById('banCountBadge').textContent = `${stats.bans} 个封禁`;
+                document.getElementById('riskCountBadge').textContent = `${stats.risk} 个风险`;
+                document.getElementById('trustCountBadge').textContent = `${stats.trusted} 个节点`;
+            },
+            
+            // 更新封禁列表
+            updateBanList(bans) {
+                const tbody = document.getElementById('banListBody');
+                
+                if (!bans || bans.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="security-empty-state">
+                                <div class="security-empty-icon"><i class="fas fa-check-circle"></i></div>
+                                暂无封禁记录，系统运行正常
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+                
+                tbody.innerHTML = bans.map(ban => `
+                    <tr>
+                        <td><strong>${this.escapeHtml(ban.ip)}</strong></td>
+                        <td>${this.escapeHtml(ban.reason || '-')}</td>
+                        <td>${this.formatTime(ban.banned_at)}</td>
+                        <td>${this.formatRemaining(ban.expires_at)}</td>
+                        <td><span class="security-badge ${ban.type === 'auto' ? 'warning' : 'danger'}">${ban.type === 'auto' ? '自动' : '手动'}</span></td>
+                        <td>
+                            <button class="security-btn success" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="SecurityPanel.unbanIP('${ban.ip}')">
+                                <i class="fas fa-unlock"></i> 解封
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            },
+            
+            // 更新风险列表
+            updateRiskList(riskIps) {
+                const tbody = document.getElementById('riskListBody');
+                
+                if (!riskIps || riskIps.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="6" class="security-empty-state">
+                                <div class="security-empty-icon"><i class="fas fa-shield-alt"></i></div>
+                                暂无可疑IP，安全状况良好
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+                
+                tbody.innerHTML = riskIps.map(ip => {
+                    const riskLevel = ip.risk_score > 70 ? 'danger' : ip.risk_score > 40 ? 'warning' : 'info';
+                    return `
+                        <tr>
+                            <td><strong>${this.escapeHtml(ip.ip)}</strong></td>
+                            <td>${ip.connections || 0}</td>
+                            <td>${ip.violations || 0}</td>
+                            <td>
+                                <span class="security-badge ${riskLevel}">
+                                    ${ip.risk_score || 0}分
+                                </span>
+                            </td>
+                            <td><span class="security-badge ${ip.status === 'observing' ? 'warning' : 'info'}">${ip.status === 'observing' ? '观察中' : '监控中'}</span></td>
+                            <td>
+                                <button class="security-btn danger" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="SecurityPanel.banIP('${ip.ip}', '高风险行为')">
+                                    <i class="fas fa-ban"></i> 封禁
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            },
+            
+            // 更新可信节点列表
+            updateTrustList(trustedNodes) {
+                const tbody = document.getElementById('trustListBody');
+                
+                if (!trustedNodes || trustedNodes.length === 0) {
+                    tbody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="security-empty-state">
+                                <div class="security-empty-icon"><i class="fas fa-user-slash"></i></div>
+                                暂无已认证的可信节点
+                            </td>
+                        </tr>
+                    `;
+                    return;
+                }
+                
+                tbody.innerHTML = trustedNodes.map(node => `
+                    <tr>
+                        <td><strong>${this.escapeHtml(node.node_id)}</strong></td>
+                        <td>${this.escapeHtml(node.ip || '-')}</td>
+                        <td>${this.formatTime(node.trusted_at)}</td>
+                        <td>速率限制放宽 · 风险上限60分</td>
+                        <td>
+                            <button class="security-btn danger" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;" onclick="SecurityPanel.untrustNode('${node.node_id}')">
+                                <i class="fas fa-user-minus"></i> 取消
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            },
+            
+            // 手动封禁 IP
+            async banIP(ip, reason = 'Manual') {
+                if (!confirm(`确定要封禁 IP ${ip} 吗？`)) return;
+                
+                try {
+                    const response = await fetch(`${this.API_BASE}/ban`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ip, reason })
+                    });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showToast(`已成功封禁 ${ip}`, 'success');
+                        this.refreshStatus();
+                    } else {
+                        this.showToast(result.message || '封禁失败', 'error');
+                    }
+                } catch (error) {
+                    console.error('[Security] 封禁失败:', error);
+                    this.showToast('封禁请求失败', 'error');
+                }
+            },
+            
+            // 解封 IP
+            async unbanIP(ip) {
+                if (!confirm(`确定要解封 IP ${ip} 吗？`)) return;
+                
+                try {
+                    const response = await fetch(`${this.API_BASE}/unban`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ ip })
+                    });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showToast(`已成功解封 ${ip}`, 'success');
+                        this.refreshStatus();
+                    } else {
+                        this.showToast(result.message || '解封失败', 'error');
+                    }
+                } catch (error) {
+                    console.error('[Security] 解封失败:', error);
+                    this.showToast('解封请求失败', 'error');
+                }
+            },
+            
+            // 标记可信节点
+            async trustNode(nodeId, ip) {
+                try {
+                    const response = await fetch(`${this.API_BASE}/trust`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ node_id: nodeId, ip })
+                    });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showToast(`已标记 ${nodeId} 为可信节点`, 'success');
+                        this.closeModal();
+                        this.refreshStatus();
+                    } else {
+                        this.showToast(result.message || '标记失败', 'error');
+                    }
+                } catch (error) {
+                    console.error('[Security] 标记失败:', error);
+                    this.showToast('标记请求失败', 'error');
+                }
+            },
+            
+            // 取消可信标记
+            async untrustNode(nodeId) {
+                if (!confirm(`确定要取消 ${nodeId} 的可信标记吗？`)) return;
+                
+                try {
+                    const response = await fetch(`${this.API_BASE}/trust/${nodeId}`, {
+                        method: 'DELETE'
+                    });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showToast(`已取消 ${nodeId} 的可信标记`, 'success');
+                        this.refreshStatus();
+                    } else {
+                        this.showToast(result.message || '取消失败', 'error');
+                    }
+                } catch (error) {
+                    console.error('[Security] 取消失败:', error);
+                    this.showToast('取消请求失败', 'error');
+                }
+            },
+            
+            // 显示封禁模态框
+            showBanModal() {
+                const modalHtml = `
+                    <div class="security-modal-overlay" onclick="SecurityPanel.closeModal()">
+                        <div class="security-modal" onclick="event.stopPropagation()">
+                            <h3 class="security-modal-title">
+                                <i class="fas fa-gavel" style="color: var(--danger);"></i>
+                                手动封禁 IP
+                            </h3>
+                            <div class="security-input-group">
+                                <label>IP 地址 *</label>
+                                <input type="text" id="banIpInput" placeholder="例如: 192.168.1.100">
+                            </div>
+                            <div class="security-input-group">
+                                <label>封禁原因</label>
+                                <textarea id="banReasonInput" rows="3" placeholder="输入封禁原因（可选）"></textarea>
+                            </div>
+                            <div class="security-modal-actions">
+                                <button class="security-btn outline" onclick="SecurityPanel.closeModal()">取消</button>
+                                <button class="security-btn danger" onclick="SecurityPanel.executeBan()">
+                                    <i class="fas fa-gavel"></i> 确认封禁
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showModal(modalHtml);
+            },
+            
+            // 执行封禁操作
+            executeBan() {
+                const ip = document.getElementById('banIpInput')?.value?.trim();
+                const reason = document.getElementById('banReasonInput')?.value?.trim() || '管理员手动封禁';
+                
+                if (!ip) {
+                    this.showToast('请输入 IP 地址', 'error');
+                    return;
+                }
+                
+                this.banIP(ip, reason);
+            },
+            
+            // 显示可信节点模态框
+            showTrustModal() {
+                const modalHtml = `
+                    <div class="security-modal-overlay" onclick="SecurityPanel.closeModal()">
+                        <div class="security-modal" onclick="event.stopPropagation()">
+                            <h3 class="security-modal-title">
+                                <i class="fas fa-user-plus" style="color: var(--success);"></i>
+                                标记可信节点
+                            </h3>
+                            <div class="security-input-group">
+                                <label>Node ID *</label>
+                                <input type="text" id="trustNodeIdInput" placeholder="例如: worker-1">
+                            </div>
+                            <div class="security-input-group">
+                                <label>关联 IP 地址</label>
+                                <input type="text" id="trustIpInput" placeholder="例如: 192.168.1.100（可选）">
+                            </div>
+                            <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1rem;">
+                                <i class="fas fa-info-circle"></i> 
+                                可信节点将获得：速率限制放宽2.5倍、风险分数上限锁定在60分、免疫自动封禁
+                            </p>
+                            <div class="security-modal-actions">
+                                <button class="security-btn outline" onclick="SecurityPanel.closeModal()">取消</button>
+                                <button class="security-btn success" onclick="SecurityPanel.executeTrust()">
+                                    <i class="fas fa-check"></i> 确认标记
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showModal(modalHtml);
+            },
+            
+            // 执行标记可信操作
+            executeTrust() {
+                const nodeId = document.getElementById('trustNodeIdInput')?.value?.trim();
+                const ip = document.getElementById('trustIpInput')?.value?.trim();
+                
+                if (!nodeId) {
+                    this.showToast('请输入 Node ID', 'error');
+                    return;
+                }
+                
+                this.trustNode(nodeId, ip);
+            },
+            
+            // 显示白名单模态框
+            showWhitelistModal() {
+                const modalHtml = `
+                    <div class="security-modal-overlay" onclick="SecurityPanel.closeModal()">
+                        <div class="security-modal" onclick="event.stopPropagation()">
+                            <h3 class="security-modal-title">
+                                <i class="fas fa-list" style="color: var(--info);"></i>
+                                白名单管理
+                            </h3>
+                            <div class="security-input-group">
+                                <label>CIDR 或 IP 地址</label>
+                                <input type="text" id="whitelistCidrInput" placeholder="例如: 192.168.1.0/24 或 10.0.0.1">
+                            </div>
+                            <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1rem;">
+                                <i class="fas fa-info-circle"></i> 
+                                白名单中的 IP 将跳过所有安全检查，直接允许连接
+                            </p>
+                            <div class="security-modal-actions">
+                                <button class="security-btn outline" onclick="SecurityPanel.closeModal()">取消</button>
+                                <button class="security-btn primary" onclick="SecurityPanel.addToWhitelist()">
+                                    <i class="fas fa-plus"></i> 添加到白名单
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showModal(modalHtml);
+            },
+            
+            // 添加到白名单
+            async addToWhitelist() {
+                const cidr = document.getElementById('whitelistCidrInput')?.value?.trim();
+                
+                if (!cidr) {
+                    this.showToast('请输入 CIDR 或 IP 地址', 'error');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`${this.API_BASE}/whitelist`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ cidr })
+                    });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showToast(`已添加 ${cidr} 到白名单`, 'success');
+                        this.closeModal();
+                        this.refreshStatus();
+                    } else {
+                        this.showToast(result.message || '添加失败', 'error');
+                    }
+                } catch (error) {
+                    console.error('[Security] 添加白名单失败:', error);
+                    this.showToast('添加请求失败', 'error');
+                }
+            },
+            
+            // 显示黑名单模态框
+            showBlacklistModal() {
+                const modalHtml = `
+                    <div class="security-modal-overlay" onclick="SecurityPanel.closeModal()">
+                        <div class="security-modal" onclick="event.stopPropagation()">
+                            <h3 class="security-modal-title">
+                                <i class="fas fa-shield-alt" style="color: var(--danger);"></i>
+                                黑名单管理
+                            </h3>
+                            <div class="security-input-group">
+                                <label>CIDR 或 IP 地址</label>
+                                <input type="text" id="blacklistCidrInput" placeholder="例如: 0.0.0.0/8 或 192.168.1.100">
+                            </div>
+                            <p style="font-size: 0.85rem; color: var(--gray-600); margin-bottom: 1rem;">
+                                <i class="fas fa-info-circle"></i> 
+                                黑名单中的 IP 将被永久拒绝连接，优先级高于白名单
+                            </p>
+                            <div class="security-modal-actions">
+                                <button class="security-btn outline" onclick="SecurityPanel.closeModal()">取消</button>
+                                <button class="security-btn danger" onclick="SecurityPanel.addToBlacklist()">
+                                    <i class="fas fa-ban"></i> 添加到黑名单
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                this.showModal(modalHtml);
+            },
+            
+            // 添加到黑名单
+            async addToBlacklist() {
+                const cidr = document.getElementById('blacklistCidrInput')?.value?.trim();
+                
+                if (!cidr) {
+                    this.showToast('请输入 CIDR 或 IP 地址', 'error');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`${this.API_BASE}/blacklist`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ cidr })
+                    });
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showToast(`已添加 ${cidr} 到黑名单`, 'success');
+                        this.closeModal();
+                        this.refreshStatus();
+                    } else {
+                        this.showToast(result.message || '添加失败', 'error');
+                    }
+                } catch (error) {
+                    console.error('[Security] 添加黑名单失败:', error);
+                    this.showToast('添加请求失败', 'error');
+                }
+            },
+            
+            // 显示模态框
+            showModal(html) {
+                // 移除现有模态框
+                this.closeModal();
+                document.body.insertAdjacentHTML('beforeend', html);
+            },
+            
+            // 关闭模态框
+            closeModal() {
+                const modal = document.querySelector('.security-modal-overlay');
+                if (modal) modal.remove();
+            },
+            
+            // 显示加载状态
+            showLoading(show) {
+                // 可以在这里添加加载动画逻辑
+                console.log(show ? '[Security] 加载中...' : '[Security] 加载完成');
+            },
+            
+            // 显示 Toast 通知
+            showToast(message, type = 'info') {
+                // 移除现有 toast
+                const existingToast = document.querySelector('.security-toast');
+                if (existingToast) existingToast.remove();
+                
+                const icons = {
+                    success: 'fa-check-circle',
+                    error: 'fa-exclamation-circle',
+                    info: 'fa-info-circle'
+                };
+                
+                const toast = document.createElement('div');
+                toast.className = `security-toast ${type}`;
+                toast.innerHTML = `<i class="fas ${icons[type]}"></i>${message}`;
+                document.body.appendChild(toast);
+                
+                // 3秒后自动消失
+                setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.style.animation = 'slideInRight 0.3s ease reverse';
+                        setTimeout(() => toast.remove(), 300);
+                    }
+                }, 3000);
+            },
+            
+            // 格式化时间
+            formatTime(timestamp) {
+                if (!timestamp) return '-';
+                const date = new Date(timestamp * 1000);
+                return date.toLocaleString('zh-CN', {
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            },
+            
+            // 格式化剩余时间
+            formatRemaining(expiresAt) {
+                if (!expiresAt) return '-';
+                const remaining = expiresAt - Math.floor(Date.now() / 1000);
+                if (remaining <= 0) return '<span class="security-badge danger">已过期</span>';
+                
+                const hours = Math.floor(remaining / 3600);
+                const minutes = Math.floor((remaining % 3600) / 60);
+                return `${hours}时${minutes}分`;
+            },
+            
+            // HTML 转义
+            escapeHtml(text) {
+                if (!text) return '';
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        };
+
+        // 全局函数（供 HTML onclick 调用）
+        function refreshSecurityStatus() {
+            SecurityPanel.refreshStatus();
+        }
+
+        function showBanModal() {
+            SecurityPanel.showBanModal();
+        }
+
+        function showTrustModal() {
+            SecurityPanel.showTrustModal();
+        }
+
+        function showWhitelistModal() {
+            SecurityPanel.showWhitelistModal();
+        }
+
+        function showBlacklistModal() {
+            SecurityPanel.showBlacklistModal();
+        }
     </script>
     
     <!-- 自定义模型对话框 -->
@@ -8621,6 +9201,523 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 </div>
             </div>
         </div>
+    </div>
+    <!-- ==================== 🛡️ Tab: 节点安全防护 ==================== -->
+    <div id="tabContentSecurity" class="container" style="display: none;">
+        <style>
+            /* ===== 安全面板专用样式 ===== */
+            .security-panel {
+                animation: fadeInUp 0.4s ease-out;
+            }
+            
+            @keyframes fadeInUp {
+                from { opacity: 0; transform: translateY(20px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            
+            .security-stats-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 1rem;
+                margin-bottom: 1.5rem;
+            }
+            
+            .security-stat-card {
+                background: white;
+                border-radius: 12px;
+                padding: 1.25rem;
+                border: 1px solid var(--gray-200);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+                transition: all 0.3s ease;
+                position: relative;
+                overflow: hidden;
+            }
+            
+            .security-stat-card::before {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 3px;
+                background: linear-gradient(90deg, var(--card-color, var(--primary)), transparent);
+            }
+            
+            .security-stat-card:hover {
+                transform: translateY(-3px);
+                box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+            }
+            
+            .security-stat-card.danger { --card-color: var(--danger); }
+            .security-stat-card.warning { --card-color: var(--warning); }
+            .security-stat-card.success { --card-color: var(--success); }
+            .security-stat-card.info { --card-color: var(--info); }
+            
+            .security-stat-icon {
+                width: 48px;
+                height: 48px;
+                border-radius: 12px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.25rem;
+                margin-bottom: 0.75rem;
+                background: linear-gradient(135deg, var(--card-color, var(--primary)), var(--card-color, var(--primary))dd);
+                color: white;
+            }
+            
+            .security-stat-value {
+                font-size: 2rem;
+                font-weight: 700;
+                color: var(--gray-900);
+                line-height: 1;
+                margin-bottom: 0.25rem;
+            }
+            
+            .security-stat-label {
+                font-size: 0.85rem;
+                color: var(--gray-600);
+                font-weight: 500;
+            }
+            
+            /* 安全操作区 */
+            .security-actions-bar {
+                display: flex;
+                gap: 0.75rem;
+                margin-bottom: 1.5rem;
+                flex-wrap: wrap;
+                align-items: center;
+            }
+            
+            .security-btn {
+                padding: 0.6rem 1.25rem;
+                border: none;
+                border-radius: 8px;
+                font-size: 0.875rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.25s ease;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            
+            .security-btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+            
+            .security-btn.primary {
+                background: linear-gradient(135deg, #4f46e5, #6366f1);
+                color: white;
+            }
+            
+            .security-btn.danger {
+                background: linear-gradient(135deg, #ef4444, #f87171);
+                color: white;
+            }
+            
+            .security-btn.success {
+                background: linear-gradient(135deg, #10b981, #34d399);
+                color: white;
+            }
+            
+            .security-btn.outline {
+                background: white;
+                color: var(--gray-700);
+                border: 2px solid var(--gray-200);
+            }
+            
+            .security-btn.outline:hover {
+                border-color: var(--primary);
+                color: var(--primary);
+            }
+            
+            /* 表格样式 */
+            .security-table-container {
+                background: white;
+                border-radius: 12px;
+                border: 1px solid var(--gray-200);
+                overflow: hidden;
+                margin-bottom: 1.5rem;
+            }
+            
+            .security-table-header {
+                background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+                padding: 1rem 1.25rem;
+                border-bottom: 1px solid var(--gray-200);
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            
+            .security-table-title {
+                font-size: 1rem;
+                font-weight: 600;
+                color: var(--gray-800);
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            
+            .security-table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            
+            .security-table th,
+            .security-table td {
+                padding: 0.875rem 1rem;
+                text-align: left;
+                border-bottom: 1px solid var(--gray-100);
+                font-size: 0.875rem;
+            }
+            
+            .security-table th {
+                background: #fafbfc;
+                font-weight: 600;
+                color: var(--gray-600);
+                text-transform: uppercase;
+                font-size: 0.8rem;
+                letter-spacing: 0.5px;
+            }
+            
+            .security-table tr:hover td {
+                background: #fafbfc;
+            }
+            
+            .security-table tr:last-child td {
+                border-bottom: none;
+            }
+            
+            /* 状态标签 */
+            .security-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.3rem 0.75rem;
+                border-radius: 20px;
+                font-size: 0.75rem;
+                font-weight: 600;
+            }
+            
+            .security-badge.danger {
+                background: #fef2f2;
+                color: #dc2626;
+                border: 1px solid #fecaca;
+            }
+            
+            .security-badge.warning {
+                background: #fffbeb;
+                color: #d97706;
+                border: 1px solid #fde68a;
+            }
+            
+            .security-badge.success {
+                background: #ecfdf5;
+                color: #059669;
+                border: 1px solid #a7f3d0;
+            }
+            
+            .security-badge.info {
+                background: #eff6ff;
+                color: #2563eb;
+                border: 1px solid #bfdbfe;
+            }
+            
+            /* 模态框 */
+            .security-modal-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0,0,0,0.5);
+                backdrop-filter: blur(4px);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10000;
+                animation: fadeIn 0.2s ease;
+            }
+            
+            @keyframes fadeIn {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+            
+            .security-modal {
+                background: white;
+                border-radius: 16px;
+                padding: 2rem;
+                max-width: 480px;
+                width: 90%;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                animation: slideIn 0.3s ease;
+            }
+            
+            @keyframes slideIn {
+                from { transform: translateY(-30px); opacity: 0; }
+                to { transform: translateY(0); opacity: 1; }
+            }
+            
+            .security-modal-title {
+                font-size: 1.25rem;
+                font-weight: 700;
+                color: var(--gray-900);
+                margin-bottom: 1rem;
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+            }
+            
+            .security-input-group {
+                margin-bottom: 1rem;
+            }
+            
+            .security-input-group label {
+                display: block;
+                font-size: 0.875rem;
+                font-weight: 600;
+                color: var(--gray-700);
+                margin-bottom: 0.5rem;
+            }
+            
+            .security-input-group input,
+            .security-input-group select,
+            .security-input-group textarea {
+                width: 100%;
+                padding: 0.75rem 1rem;
+                border: 2px solid var(--gray-200);
+                border-radius: 8px;
+                font-size: 0.9rem;
+                transition: all 0.25s ease;
+            }
+            
+            .security-input-group input:focus,
+            .security-input-group select:focus,
+            .security-input-group textarea:focus {
+                outline: none;
+                border-color: var(--primary);
+                box-shadow: 0 0 0 3px rgba(79,70,229,0.1);
+            }
+            
+            .security-modal-actions {
+                display: flex;
+                gap: 0.75rem;
+                margin-top: 1.5rem;
+                justify-content: flex-end;
+            }
+            
+            /* 空状态 */
+            .security-empty-state {
+                text-align: center;
+                padding: 3rem 2rem;
+                color: var(--gray-500);
+            }
+            
+            .security-empty-icon {
+                font-size: 3rem;
+                margin-bottom: 1rem;
+                opacity: 0.5;
+            }
+            
+            /* 加载动画 */
+            .security-loading {
+                text-align: center;
+                padding: 2rem;
+                color: var(--gray-500);
+            }
+            
+            .security-spinner {
+                display: inline-block;
+                width: 32px;
+                height: 32px;
+                border: 3px solid var(--gray-200);
+                border-top-color: var(--primary);
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
+            
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+            
+            /* Toast 通知 */
+            .security-toast {
+                position: fixed;
+                bottom: 2rem;
+                right: 2rem;
+                padding: 1rem 1.5rem;
+                border-radius: 10px;
+                color: white;
+                font-weight: 600;
+                font-size: 0.875rem;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+                z-index: 10001;
+                animation: slideInRight 0.3s ease;
+                display: flex;
+                align-items: center;
+                gap: 0.75rem;
+            }
+            
+            @keyframes slideInRight {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            
+            .security-toast.success { background: linear-gradient(135deg, #10b981, #059669); }
+            .security-toast.error { background: linear-gradient(135deg, #ef4444, #dc2626); }
+            .security-toast.info { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+        </style>
+        
+        <div class="security-panel">
+            <!-- 页面标题 -->
+            <div style="margin-bottom: 1.5rem;">
+                <h2 style="font-size: 1.75rem; font-weight: 700; color: var(--gray-900); margin-bottom: 0.5rem; display: flex; align-items: center; gap: 0.75rem;">
+                    <i class="fas fa-shield-alt" style="color: var(--primary);"></i>
+                    节点安全防护中心
+                </h2>
+                <p style="color: var(--gray-600); font-size: 0.95rem;">实时监控集群安全状态，管理访问控制和防护策略</p>
+            </div>
+            
+            <!-- 统计卡片 -->
+            <div class="security-stats-grid" id="securityStatsGrid">
+                <!-- 动态加载 -->
+                <div class="security-stat-card info">
+                    <div class="security-stat-icon"><i class="fas fa-chart-pie"></i></div>
+                    <div class="security-stat-value">--</div>
+                    <div class="security-stat-label">总监控 IP</div>
+                </div>
+                <div class="security-stat-card danger">
+                    <div class="security-stat-icon"><i class="fas fa-ban"></i></div>
+                    <div class="security-stat-value">--</div>
+                    <div class="security-stat-label">当前封禁数</div>
+                </div>
+                <div class="security-stat-card warning">
+                    <div class="security-stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                    <div class="security-stat-value">--</div>
+                    <div class="security-stat-label">高风险 IP</div>
+                </div>
+                <div class="security-stat-card success">
+                    <div class="security-stat-icon"><i class="fas fa-user-check"></i></div>
+                    <div class="security-stat-value">--</div>
+                    <div class="security-stat-label">可信节点</div>
+                </div>
+            </div>
+            
+            <!-- 操作栏 -->
+            <div class="security-actions-bar">
+                <button class="security-btn primary" onclick="refreshSecurityStatus()">
+                    <i class="fas fa-sync-alt"></i> 刷新状态
+                </button>
+                <button class="security-btn danger" onclick="showBanModal()">
+                    <i class="fas fa-gavel"></i> 手动封禁
+                </button>
+                <button class="security-btn success" onclick="showTrustModal()">
+                    <i class="fas fa-user-plus"></i> 标记可信
+                </button>
+                <button class="security-btn outline" onclick="showWhitelistModal()">
+                    <i class="fas fa-list"></i> 白名单
+                </button>
+                <button class="security-btn outline" onclick="showBlacklistModal()">
+                    <i class="fas fa-shield-alt"></i> 黑名单
+                </button>
+            </div>
+            
+            <!-- 封禁列表 -->
+            <div class="security-table-container">
+                <div class="security-table-header">
+                    <span class="security-table-title">
+                        <i class="fas fa-ban" style="color: var(--danger);"></i>
+                        当前封禁列表
+                    </span>
+                    <span id="banCountBadge" class="security-badge danger">0 个封禁</span>
+                </div>
+                <table class="security-table" id="banListTable">
+                    <thead>
+                        <tr>
+                            <th>IP 地址</th>
+                            <th>原因</th>
+                            <th>封禁时间</th>
+                            <th>剩余时间</th>
+                            <th>类型</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="banListBody">
+                        <tr>
+                            <td colspan="6" class="security-empty-state">
+                                <div class="security-empty-icon"><i class="fas fa-check-circle"></i></div>
+                                暂无封禁记录，系统运行正常
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- 可疑IP监控 -->
+            <div class="security-table-container">
+                <div class="security-table-header">
+                    <span class="security-table-title">
+                        <i class="fas fa-radar" style="color: var(--warning);"></i>
+                        可疑 IP 监控
+                    </span>
+                    <span id="riskCountBadge" class="security-badge warning">0 个风险</span>
+                </div>
+                <table class="security-table" id="riskListTable">
+                    <thead>
+                        <tr>
+                            <th>IP 地址</th>
+                            <th>连接次数</th>
+                            <th>违规次数</th>
+                            <th>风险分数</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="riskListBody">
+                        <tr>
+                            <td colspan="6" class="security-empty-state">
+                                <div class="security-empty-icon"><i class="fas fa-shield-alt"></i></div>
+                                暂无可疑IP，安全状况良好
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- 可信节点列表 -->
+            <div class="security-table-container">
+                <div class="security-table-header">
+                    <span class="security-table-title">
+                        <i class="fas fa-user-check" style="color: var(--success);"></i>
+                        已认证的可信节点
+                    </span>
+                    <span id="trustCountBadge" class="security-badge success">0 个节点</span>
+                </div>
+                <table class="security-table" id="trustListTable">
+                    <thead>
+                        <tr>
+                            <th>Node ID</th>
+                            <th>关联 IP</th>
+                            <th>标记时间</th>
+                            <th>特权说明</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trustListBody">
+                        <tr>
+                            <td colspan="5" class="security-empty-state">
+                                <div class="security-empty-icon"><i class="fas fa-user-slash"></i></div>
+                                暂无已认证的可信节点
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 
 </body>
 </html>

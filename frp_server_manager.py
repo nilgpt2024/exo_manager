@@ -322,7 +322,6 @@ class FRPServerManager:
             if self._is_port_in_use(self.config.bind_port):
                 logger.warning(f"[FRPServer] 端口 {self.config.bind_port} 被占用，尝试清理旧进程...")
                 self._kill_process_on_port(self.config.bind_port)
-                import asyncio
                 await asyncio.sleep(0.5)  # 等待端口释放
 
             if self.status == FRPStatus.RUNNING and self.is_running():
