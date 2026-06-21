@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Tuple
 from enum import Enum
 import json
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -64,134 +65,133 @@ class ModelSpec:
         return self.total_memory_mb / 1024
 
 
-# 预定义模型库（可根据实际需求扩展）
+# 模型库配置文件路径
+_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "custom_models.json")
+
+
+def _load_model_library() -> Dict[str, ModelSpec]:
+    """从配置文件加载模型库，文件不存在时返回空字典"""
+    if not os.path.exists(_CONFIG_FILE):
+        logger.warning(f"[AutoAllocator] 配置文件不存在: {_CONFIG_FILE}")
+        return {}
+
+    try:
+        with open(_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        library = {}
+        model_cards = data.get("model_cards", {})
+        pretty_names = data.get("pretty_names", {})
+
+        for key, card in model_cards.items():
+            alloc = card.get("allocation", {})
+            library[key] = ModelSpec(
+                model_id=card["repo"][list(card["repo"].keys())[0]],
+                pretty_name=pretty_names.get(key, key),
+                total_layers=card.get("layers", 0),
+                layer_memory_mb=alloc.get("layer_memory_mb", 100),
+                param_count=alloc.get("param_count", 0),
+                category=alloc.get("category", "general"),
+                priority=alloc.get("priority", 1.0),
+            )
+
+        logger.info(f"[AutoAllocator] 从配置文件加载 {len(library)} 个模型")
+        return library
+    except Exception as e:
+        logger.error(f"[AutoAllocator] 加载模型库失败: {e}")
+        return {}
+
+
+def get_model_library() -> Dict[str, ModelSpec]:
+    """获取当前模型库（带缓存，支持热重载）"""
+    # 每次调用都重新读取，支持运行时修改配置
+    return _load_model_library()
+
+
+# 预定义模型库（保留作为默认值，实际使用从配置文件加载）
 MODEL_LIBRARY: Dict[str, ModelSpec] = {
-    # === 小型模型 (< 4B) - 适合低延迟场景 ===
-    "qwen3-0.6b": ModelSpec(
+    "qwen-3-0.6b": ModelSpec(
         model_id="Qwen/Qwen3-0.6B",
-        pretty_name="Qwen3-0.6B",
-        total_layers=24,
-        layer_memory_mb=45,
+        pretty_name="Qwen 3 0.6B",
+        total_layers=28,
+        layer_memory_mb=100,
         param_count=0.6,
         category="general",
         priority=0.8
     ),
-    "qwen3-1.7b": ModelSpec(
-        model_id="Qwen/Qwen3-1.7B",
-        pretty_name="Qwen3-1.7B",
-        total_layers=24,
-        layer_memory_mb=80,
-        param_count=1.7,
-        category="general",
-        priority=0.9
-    ),
-    "qwen3-4b": ModelSpec(
+    "qwen-3-4b": ModelSpec(
         model_id="Qwen/Qwen3-4B",
-        pretty_name="Qwen3-4B",
+        pretty_name="Qwen 3 4B",
         total_layers=36,
-        layer_memory_mb=110,
+        layer_memory_mb=215,
         param_count=4,
         category="general",
         priority=1.0
     ),
-
-    # === 中型模型 (4B - 14B) - 性价比之选 ===
-    "qwen3-8b": ModelSpec(
-        model_id="Qwen/Qwen3-8B",
-        pretty_name="Qwen3-8B",
-        total_layers=40,
-        layer_memory_mb=180,
-        param_count=8,
-        category="general",
-        priority=1.2
-    ),
-    "qwen2.5-7b": ModelSpec(
-        model_id="Qwen/Qwen2.5-7B",
-        pretty_name="Qwen2.5-7B",
+    "qwen-3-vl-2b": ModelSpec(
+        model_id="Qwen/Qwen3-VL-2B-Instruct",
+        pretty_name="Qwen 3 VL 2B",
         total_layers=28,
-        layer_memory_mb=160,
+        layer_memory_mb=240,
+        param_count=2,
+        category="vision",
+        priority=0.9
+    ),
+    "qwen-3-vl-4b": ModelSpec(
+        model_id="Qwen/Qwen3-VL-4B-Instruct",
+        pretty_name="Qwen 3 VL 4B",
+        total_layers=36,
+        layer_memory_mb=380,
+        param_count=4,
+        category="vision",
+        priority=1.0
+    ),
+    "fara-7b": ModelSpec(
+        model_id="microsoft/Fara-7B-INT8",
+        pretty_name="Fara 7B (Microsoft Computer Use Agent)",
+        total_layers=28,
+        layer_memory_mb=560,
         param_count=7,
-        category="code",
-        priority=1.1
+        category="agent",
+        priority=0.7
     ),
-    "llama3.1-8b": ModelSpec(
-        model_id="meta-llama/Llama-3.1-8B",
-        pretty_name="Llama3.1-8B",
-        total_layers=32,
-        layer_memory_mb=170,
-        param_count=8,
+    "qwen-2.5-vl-3b": ModelSpec(
+        model_id="Qwen/Qwen2.5-VL-3B-Instruct",
+        pretty_name="Qwen 2.5 VL 3B",
+        total_layers=36,
+        layer_memory_mb=330,
+        param_count=3,
+        category="vision",
+        priority=0.9
+    ),
+    "llama-3.2-1b": ModelSpec(
+        model_id="unsloth/Llama-3.2-1B-Instruct",
+        pretty_name="Llama 3.2 1B",
+        total_layers=16,
+        layer_memory_mb=250,
+        param_count=1,
         category="general",
-        priority=1.1
+        priority=0.7
     ),
-    "qwen3-14b": ModelSpec(
-        model_id="Qwen/Qwen3-14B",
-        pretty_name="Qwen3-14B",
-        total_layers=48,
-        layer_memory_mb=220,
-        param_count=14,
-        category="reasoning",
-        priority=1.3
+    "qwen-3-tts-1.7b": ModelSpec(
+        model_id="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        pretty_name="Qwen 3 TTS 1.7B (VoiceDesign)",
+        total_layers=36,
+        layer_memory_mb=200,
+        param_count=1.7,
+        category="audio",
+        priority=0.8
     ),
-
-    # === 大型模型 (14B - 72B) - 高性能场景 ===
-    "qwen3-32b": ModelSpec(
-        model_id="Qwen/Qwen3-32B",
-        pretty_name="Qwen3-32B",
-        total_layers=64,
-        layer_memory_mb=350,
-        param_count=32,
-        category="reasoning",
-        priority=1.5
-    ),
-    "qwen2.5-32b": ModelSpec(
-        model_id="Qwen/Qwen2.5-32B",
-        pretty_name="Qwen2.5-32B",
-        total_layers=64,
-        layer_memory_mb=340,
-        param_count=32,
-        category="code",
-        priority=1.4
-    ),
-    "llama3.1-70b": ModelSpec(
-        model_id="meta-llama/Llama-3.1-70B",
-        pretty_name="Llama3.1-70B",
-        total_layers=80,
-        layer_memory_mb=420,
-        param_count=70,
-        category="general",
-        priority=1.6
-    ),
-    "qwen3-max": ModelSpec(
-        model_id="Qwen/Qwen3-Max",
-        pretty_name="Qwen3-Max(AoE)",
-        total_layers=80,
-        layer_memory_mb=450,
-        param_count=72,
-        category="reasoning",
-        priority=1.8
-    ),
-
-    # === 专业模型 ===
-    "codestral-22b": ModelSpec(
-        model_id="mistralai/Codestral-22B",
-        pretty_name="Codestral-22B",
-        total_layers=56,
-        layer_memory_mb=300,
-        param_count=22,
-        category="code",
-        priority=1.3
-    ),
-    "deepseek-coder-33b": ModelSpec(
-        model_id="deepseek-ai/DeepSeek-Coder-33B",
-        pretty_name="DeepSeek-Coder-33B",
-        total_layers=62,
-        layer_memory_mb=360,
-        param_count=33,
-        category="code",
-        priority=1.4
+    "dummy": ModelSpec(
+        model_id="dummy",
+        pretty_name="Dummy (测试用)",
+        total_layers=8,
+        layer_memory_mb=10,
+        param_count=0.01,
+        category="test",
+        priority=0.1
     ),
 }
-
 
 # ============================================================
 #  分配策略枚举
@@ -305,7 +305,7 @@ class AutoModelAllocator:
             manager: EXOClusterManager 实例
         """
         self.manager = manager
-        self.model_library = MODEL_LIBRARY.copy()
+        self.model_library = get_model_library() or MODEL_LIBRARY.copy()
         self.allocation_history: List[ModelAllocationPlan] = []
         self._current_plan: Optional[ModelAllocationPlan] = None
 
@@ -544,13 +544,21 @@ class AutoModelAllocator:
         # 创建节点资源的可变副本（用于跟踪分配过程）
         node_states = {n.node_id: n.usable_memory_mb for n in nodes}
 
+        # 构建反向映射：spec.model_id (HF repo ID) → MODEL_LIBRARY key (短名)
+        _name_map = {spec.model_id: lib_key for lib_key, spec in self.model_library.items()}
+
+        def _get_short_name(spec) -> str:
+            """获取模型的短名标识"""
+            return _name_map.get(spec.model_id, spec.model_id)
+
         for candidate in candidates:
-            model_id = candidate.model_id
+            model_id = candidate.model_id  # 这是 HF repo ID
+            short_model_id = _get_short_name(candidate)  # 转换为短名
             model_mem = candidate.total_memory_mb
             total_layers = candidate.total_layers
 
             logger.debug(f"[AutoAllocator] 尝试分配 {candidate.pretty_name}: "
-                        f"{model_mem/1024:.1f}GB, {total_layers}层")
+                        f"{model_mem/1024:.1f}GB, {total_layers}层 (key={short_model_id})")
 
             # ===== Phase 1: 尝试单节点完整加载 =====
             single_node_result = self._try_single_node(
@@ -559,7 +567,7 @@ class AutoModelAllocator:
 
             if single_node_result:
                 node_id, alloc_info = single_node_result
-                allocations[model_id] = {node_id: alloc_info}
+                allocations[short_model_id] = {node_id: alloc_info}  # 用短名!
                 # 更新节点状态
                 node_states[node_id] -= model_mem
                 logger.info(f"[AutoAllocator] ✅ {candidate.pretty_name} → "
@@ -572,7 +580,7 @@ class AutoModelAllocator:
             )
 
             if sharded_result:
-                allocations[model_id] = sharded_result
+                allocations[short_model_id] = sharded_result  # 用短名!
                 # 更新所有涉及的节点状态
                 for node_id, alloc_info in sharded_result.items():
                     layers_count = alloc_info["layers_count"]
@@ -584,7 +592,7 @@ class AutoModelAllocator:
             # ===== 无法分配 =====
             reason = self._get_unallocation_reason(candidate, nodes, node_states)
             unallocated.append({
-                "model_id": model_id,
+                "model_id": short_model_id,  # 用短名
                 "pretty_name": candidate.pretty_name,
                 "memory_gb": round(model_mem / 1024, 1),
                 "param_count": candidate.param_count,

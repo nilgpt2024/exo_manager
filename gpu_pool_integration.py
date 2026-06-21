@@ -47,9 +47,10 @@ class ModelAllocation:
     strategy: str
     estimated_memory_per_node: Dict[str, float]  # {node_id: memory_gb}
     # 新增字段
-    allocation_type: str = "sharded"  # "single_node" | "sharded" | "rebalanced"
+    allocation_type: str = "sharded"  # "single_node" | "sharded" | "rebalanced" | "pending_more_nodes"
     decision_reason: str = ""         # 决策原因说明
     safety_warnings: List[str] = None  # 安全警告（如余量不足等）
+    min_nodes_required: int = 0       # pending 状态：至少需要多少节点才能分配
 
 
 # ============================================================
@@ -185,10 +186,13 @@ class SmartAllocator:
 
         model_total_mb = total_layers * layer_memory_mb
         max_node_mem = max(n["memory_mb"] for n in nodes) if nodes else 0
+        max_free_mem = max(n["free_mb"] for n in nodes) if nodes else 0
+        total_free_mem = sum(n["free_mb"] for n in nodes)
 
         logger.info(f"🧠 [SmartAlloc] 模型 {model_id}: {model_total_mb/1024:.1f}GB, "
                    f"{total_layers}层, 可用节点={len(nodes)}, "
-                   f"最大节点显存={max_node_mem/1024:.1f}GB")
+                   f"最大节点显存={max_node_mem/1024:.1f}GB, "
+                   f"最大剩余={max_free_mem/1024:.1f}GB, 总剩余={total_free_mem/1024:.1f}GB")
 
         # ====== smart 策略：智能决策流程 ======
         if strategy == "smart" and not force_shard:
@@ -200,8 +204,30 @@ class SmartAllocator:
             if single_result:
                 return single_result
 
-            # Phase 2: 单节点不可行 → 走拆分策略
+            # Phase 2: 单节点不可行 → 检查集群总剩余是否足够
             logger.info(f"🧠 [SmartAlloc] 单节点不可行，切换到拆分策略")
+
+            # 计算至少需要多少节点（每个节点至少能放1层 + 余量）
+            per_node_need = layer_memory_mb * 1.15  # 每节点至少1层+余量
+            min_nodes = max(2, int(model_total_mb * 1.15 / max(n["free_mb"] for n in nodes)) + 1)
+
+            if total_free_mem < model_total_mb * 1.15:  # 留15%余量
+                # 不再直接拒绝，返回 pending 状态等待更多节点
+                logger.warning(f"🧠 [SmartAlloc] ⏳ 集群显存不足，需要更多节点: "
+                              f"当前{len(nodes)}节点总剩余{total_free_mem/1024:.1f}GB, "
+                              f"模型需要{model_total_mb*1.15/1024:.1f}GB, "
+                              f"预计需要≥{min_nodes}个节点")
+                return ModelAllocation(
+                    model_id=model_id,
+                    total_layers=total_layers,
+                    allocations=[],
+                    strategy=strategy,
+                    estimated_memory_per_node={},
+                    allocation_type="pending_more_nodes",
+                    decision_reason=f"集群显存不足({len(nodes)}节点, 总剩余{total_free_mem/1024:.1f}GB), 需要≥{min_nodes}个节点",
+                    safety_warnings=[f"当前{len(nodes)}个节点不足以分配此模型，等待新节点加入"],
+                    min_nodes_required=min_nodes
+                )
 
         # ====== 传统拆分策略 ======
         sharded_allocations = self._allocate_sharded(
@@ -214,7 +240,7 @@ class SmartAllocator:
                 alloc["layers_count"] * layer_memory_mb / 1024, 2
             )
 
-        level, reason = self.classify_model(model_total_mb, max_node_mem)
+        level, reason = self.classify_model(model_total_mb, max_free_mem)
 
         result = ModelAllocation(
             model_id=model_id,
@@ -348,6 +374,7 @@ class SmartAllocator:
                 "node_id": n["node_id"],
                 "address": n["address"],
                 "memory_mb": n["memory_mb"],  # 用总显存而非剩余显存做权重
+                "free_mb": n.get("free_mb", 0),  # [FIX] 传递剩余显存用于验证
                 "flops": n.get("flops", {}),
                 "loaded_models": n["loaded_models"]
             }
@@ -355,13 +382,33 @@ class SmartAllocator:
         ]
 
         if strategy in ("memory_weighted", "smart"):
-            return self._legacy_allocate_by_memory(plain_nodes, total_layers, layer_memory_mb)
+            raw_allocs = self._legacy_allocate_by_memory(plain_nodes, total_layers, layer_memory_mb)
         elif strategy == "uniform":
-            return self._legacy_allocate_uniformly(plain_nodes, total_layers)
+            raw_allocs = self._legacy_allocate_uniformly(plain_nodes, total_layers)
         elif strategy == "performance_weighted":
-            return self._legacy_allocate_by_performance(plain_nodes, total_layers, layer_memory_mb)
+            raw_allocs = self._legacy_allocate_by_performance(plain_nodes, total_layers, layer_memory_mb)
         else:
-            return self._legacy_allocate_by_memory(plain_nodes, total_layers, layer_memory_mb)
+            raw_allocs = self._legacy_allocate_by_memory(plain_nodes, total_layers, layer_memory_mb)
+
+        # [FIX] 验证每个节点的分配不超过其剩余显存
+        validated = []
+        free_map = {n["node_id"]: n.get("free_mb", 0) for n in nodes}
+        for alloc in raw_allocs:
+            node_free = free_map.get(alloc["node_id"], 0)
+            alloc_mem = alloc["layers_count"] * layer_memory_mb
+            if node_free < alloc_mem:
+                logger.warning(f"🧠 [SmartAlloc] ⚠️ 节点 {alloc['node_id']} 剩余不足: "
+                              f"{node_free/1024:.1f}GB < 分配需要{alloc_mem/1024:.1f}GB，跳过")
+                continue
+            validated.append(alloc)
+
+        if not validated:
+            raise ValueError(
+                f"所有节点剩余显存均不足以承载拆分后的分片 "
+                f"(每层约{layer_memory_mb}MB, 总需{total_layers * layer_memory_mb / 1024:.1f}GB)"
+            )
+
+        return validated
 
     # ---- 以下为原有的三种分配策略（保持向后兼容）----
 

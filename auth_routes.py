@@ -11,8 +11,6 @@ EXO Cluster Manager - 认证路由
   /login/qrcode/{id}/confirm - 确认登录
   /login/email            - 邮箱密码登录
   /register/email         - 邮箱注册
-  /login/wechat/callback - 微信 OAuth2 回调
-  /login/wechat/status   - 微信登录状态
   /logout                - 退出登录
   /me                    - 获取当前用户信息
 
@@ -73,18 +71,12 @@ class AdminLoginRequest(BaseModel):
 
 
 class ScanQrcodeRequest(BaseModel):
-    nickname: str = Field("微信用户", description="用户昵称")
-    avatar: str = Field("", description="用户头像URL")
-
-
-class WechatMiniLoginRequest(BaseModel):
-    code: str = Field(..., description="微信小程序登录code")
-    nickname: str = Field("微信用户", description="用户昵称")
+    nickname: str = Field("用户", description="用户昵称")
     avatar: str = Field("", description="用户头像URL")
 
 
 class ConfirmQrcodeRequest(BaseModel):
-    code: str = Field("", description="微信小程序登录code")
+    code: str = Field("", description="登录code (可选)")
 
 
 class EmailRegisterRequest(BaseModel):
@@ -153,45 +145,10 @@ def set_secure_cookie(response: Response, key: str, value: str, max_age: int = 7
 
 @auth_router.post("/login/qrcode")
 async def create_qrcode():
-    """创建微信登录二维码"""
+    """创建登录二维码"""
     auth_mgr = get_auth_manager()
     qrcode_info = auth_mgr.create_login_qrcode()
     return {"success": True, "data": qrcode_info}
-
-
-@auth_router.get("/login/qrcode/{qrcode_id}/image")
-async def get_mini_program_qrcode(qrcode_id: str):
-    """
-    获取小程序码图片
-
-    返回 PNG 格式的小程序码图片，用户扫码后跳转到小程序 login 页面
-    """
-    auth_mgr = get_auth_manager()
-
-    qrcode_data = auth_mgr._login_qrcodes.get(qrcode_id)
-    if not qrcode_data:
-        raise HTTPException(status_code=404, detail="QR code not found")
-
-    if time.time() > qrcode_data["expires_at"]:
-        raise HTTPException(status_code=410, detail="QR code expired")
-
-    qrcode_image = await auth_mgr.create_mini_program_qrcode(qrcode_id)
-
-    if not qrcode_image:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to generate mini program QR code"
-        )
-
-    return StreamingResponse(
-        io.BytesIO(qrcode_image),
-        media_type="image/png",
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-    )
 
 
 @auth_router.get("/login/qrcode/{qrcode_id}")
@@ -206,7 +163,7 @@ async def get_qrcode_status(qrcode_id: str):
 
 @auth_router.post("/login/qrcode/{qrcode_id}/scan")
 async def scan_qrcode(qrcode_id: str, request: ScanQrcodeRequest):
-    """扫描二维码 (微信端调用)"""
+    """扫描二维码"""
     auth_mgr = get_auth_manager()
     result = auth_mgr.scan_qrcode(
         qrcode_id,
@@ -220,29 +177,17 @@ async def scan_qrcode(qrcode_id: str, request: ScanQrcodeRequest):
 
 @auth_router.post("/login/qrcode/{qrcode_id}/confirm")
 async def confirm_qrcode_login(qrcode_id: str, request: ConfirmQrcodeRequest, response: Response):
-    """确认登录 (微信端调用)"""
+    """确认登录"""
     auth_mgr = get_auth_manager()
-    
-    if request.code:
-        # 小程序端带code，创建用户并登录
-        token, user = auth_mgr.wechat_mini_login(
-            code=request.code,
-            nickname=f"wx_user_{qrcode_id[-6:]}",
-            avatar=""
-        )
-    else:
-        # 使用已扫码的用户信息
-        token = auth_mgr.confirm_qrcode_login(qrcode_id)
-        user = None
-    
+
+    # 使用已扫码的用户信息
+    token = auth_mgr.confirm_login(qrcode_id)
+
     if not token:
         raise HTTPException(status_code=404, detail="QR code not found or not scanned")
 
     set_secure_cookie(response, "session_token", token)
-    result = {"success": True}
-    if user:
-        result["data"] = {"user": user}
-    return result
+    return {"success": True}
 
 
 @auth_router.post("/register/email")
@@ -351,70 +296,6 @@ async def login_email(request_data: EmailLoginRequest, request: Request, respons
     }
 
 
-@auth_router.post("/login/wechat")
-async def wechat_mini_login(request: WechatMiniLoginRequest, response: Response):
-    """微信小程序登录"""
-    auth_mgr = get_auth_manager()
-    token, user = auth_mgr.wechat_mini_login(
-        code=request.code,
-        nickname=request.nickname,
-        avatar=request.avatar
-    )
-    
-    if not token:
-        raise HTTPException(status_code=500, detail="Login failed")
-
-    set_secure_cookie(response, "session_token", token)
-
-    return {"success": True, "data": {"user": user}}
-
-
-@auth_router.post("/login/wechat/mini")
-async def wechat_mini_login_with_account(request: WechatMiniLoginRequest, response: Response):
-    """
-    微信小程序登录
-    
-    根据 openid 识别用户，返回：
-    - session token
-    - 用户基本信息
-    - API Key
-    """
-    auth_mgr = get_auth_manager()
-    
-    token, user = auth_mgr.wechat_mini_login(
-        code=request.code,
-        nickname=request.nickname,
-        avatar=request.avatar
-    )
-    
-    if not token:
-        raise HTTPException(status_code=500, detail="Login failed")
-
-    set_secure_cookie(response, "session_token", token)
-
-    user_data = user.to_dict() if hasattr(user, 'to_dict') else {
-        'id': user.id,
-        'nickname': user.nickname,
-        'avatar': getattr(user, 'avatar', ''),
-        'union_id': user.union_id
-    }
-    
-    try:
-        api_key = auth_mgr.get_or_create_api_key(user.id)
-        user_data['api_key'] = api_key
-    except Exception as e:
-        print(f"API Key 生成失败: {e}")
-        user_data['api_key'] = ''
-    
-    return {
-        "success": True,
-        "data": {
-            "token": token,
-            "user": user_data
-        }
-    }
-
-
 @auth_router.get("/v1/user/api-info")
 async def get_user_api_info(request: Request):
     """获取用户的 API 配置信息"""
@@ -436,52 +317,6 @@ async def get_user_api_info(request: Request):
         "data": {
             "api_key": api_key,
             "api_url": f"{base_url}/v1"
-        }
-    }
-
-
-@auth_router.post("/api/wechat/mini/qr-confirm")
-async def wechat_mini_qr_confirm(request: Request):
-    """
-    小程序扫码确认网站登录
-    
-    当用户在网站上看到二维码，用小程序扫描后，
-    小程序会调用此接口确认登录，完成网站的认证流程
-    """
-    token = get_session_token(request)
-    if not token:
-        raise HTTPException(status_code=401, detail="Not logged in")
-    
-    auth_mgr = get_auth_manager()
-    user = auth_mgr.validate_session(token)
-    if not user:
-        raise HTTPException(status_code=401, detail="Session expired")
-    
-    try:
-        body = await request.json()
-    except:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-    
-    qr_id = body.get('qr_id')
-    if not qr_id:
-        raise HTTPException(status_code=400, detail="Missing qr_id")
-    
-    user_info = body.get('user_info', {})
-    
-    import time
-    import uuid
-    
-    session_token = f"website_{uuid.uuid4().hex[:32]}_{int(time.time())}"
-    
-    return {
-        "success": True,
-        "data": {
-            "message": "Website login confirmed",
-            "session_token": session_token,
-            "user_id": user.id,
-            "nickname": user_info.get('nickname', user.nickname),
-            "avatar": user_info.get('avatar', ''),
-            "qr_id": qr_id
         }
     }
 
@@ -639,31 +474,9 @@ async def get_checkin_status(request: Request):
             "checked_today": checked_today,
             "consecutive_days": consecutive,
             "total_checkins": checkin_data.get('total_checkins', 0),
-            "last_reward": checkin_data.get('last_reward', 0),
             "last_date": last_checkin
         }
     }
-
-
-# 微信 OAuth2 集成 (H5/公众号)
-@auth_router.get("/login/wechat/oauth")
-async def wechat_login_redirect():
-    """重定向到微信 OAuth 授权页"""
-    raise HTTPException(status_code=501, detail="WeChat OAuth2 requires configuration")
-
-
-@auth_router.get("/login/wechat/callback")
-async def wechat_login_callback(code: Optional[str] = None, state: Optional[str] = None):
-    """微信 OAuth 回调"""
-    if not code:
-        raise HTTPException(status_code=400, detail="Code is required")
-    raise HTTPException(status_code=501, detail="WeChat OAuth2 requires configuration")
-
-
-@auth_router.get("/login/wechat/status")
-async def wechat_login_status_check():
-    """检查微信登录状态"""
-    raise HTTPException(status_code=501, detail="WeChat OAuth2 requires configuration")
 
 
 @auth_router.post("/logout")

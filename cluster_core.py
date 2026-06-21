@@ -1281,6 +1281,11 @@ class EXOClusterManager:
         model_instances: Dict[str, List[Tuple[str, str, Dict]]] = {}
 
         for node_id, connector in getattr(self, 'connectors', {}).items():
+            # ✅ 跳过离线节点，避免注册残留幽灵数据
+            node = self.nodes.get(node_id)
+            if not node or node.status.value != "online":
+                continue
+
             for model in connector.node_info.loaded_models:
                 model_id = model.get("model_id", "")
                 base_id = model_id.split("::")[0] if "::" in model_id else model_id
@@ -1289,9 +1294,13 @@ class EXOClusterManager:
                     model_instances[base_id] = []
                 model_instances[base_id].append((node_id, model_id, shard))
 
-        # Fallback: 从 nodes 补充
+        # Fallback: 从 nodes 补充（同样需要检查在线状态）
         if not model_instances and getattr(self, 'nodes', None):
             for node_id, node_info in self.nodes.items():
+                # ✅ 只处理在线节点
+                if node_info.status.value != "online":
+                    continue
+
                 if node_info.loaded_models:
                     for m in node_info.loaded_models:
                         model_id = m.get("model_id", "")
@@ -1941,7 +1950,18 @@ class EXOClusterManager:
             logger.info(f"📦 模型 {full_model_id} 分配方案:")
             for alloc in allocation.allocations:
                 logger.info(f"   节点 {alloc['node_id']}: 层 {alloc['start_layer']}-{alloc['end_layer']} ({alloc['layers_count']}层)")
-            
+
+            # 处理 pending_more_nodes 状态：集群显存不足，需要更多节点
+            if allocation.allocation_type == "pending_more_nodes":
+                logger.warning(f"📦 [ModelLoad] ⏳ 模型 {model_id} 需要更多节点: {allocation.decision_reason}")
+                return {
+                    "success": False,
+                    "error": allocation.decision_reason,
+                    "status": "pending_more_nodes",
+                    "min_nodes_required": getattr(allocation, 'min_nodes_required', 0),
+                    "instance_id": instance_id
+                }
+
             # Step 2: 过滤目标节点（如果指定）
             if target_nodes:
                 allocation.allocations = [

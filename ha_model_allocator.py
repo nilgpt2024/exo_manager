@@ -652,6 +652,20 @@ class HAModelAllocator:
 
         # ===== 开始分配 =====
 
+        # 构建反向映射：spec.model_id (HF repo ID) → MODEL_LIBRARY key (短名)
+        # 确保 allocations 字典的 key 是短名（如 "qwen-3-4b"），而非 HF repo ID
+        _name_map = {spec.model_id: lib_key for lib_key, spec in self.model_library.items()}
+        logger.info(f"[HAModelAlloc] 🔍 名称映射表: {_name_map}")  # 调试日志
+
+        def _get_short_name(spec) -> str:
+            """获取模型的短名标识"""
+            result = _name_map.get(spec.model_id, spec.model_id)
+            if result == spec.model_id and "/" in spec.model_id:
+                logger.error(f"[HAModelAlloc] ❌ _get_short_name 未找到映射: spec.model_id='{spec.model_id}', _name_map={_name_map}")
+            else:
+                logger.info(f"[HAModelAlloc] ✅ _get_short_name: '{spec.model_id}' → '{result}'")
+            return result
+
         # Phase 1: 分配关键模型（保证冗余）
         for model_spec in critical_models:
             instances = allocate_model_instances(
@@ -661,9 +675,10 @@ class HAModelAllocator:
             )
 
             if instances:
-                allocations[model_spec.model_id] = instances
-                logger.debug(f"[HAModelAlloc] ✅ 关键模型 {model_spec.pretty_name}: "
-                           f"{len(instances)}个实例 (主={instances[0].node_id})")
+                short_name = _get_short_name(model_spec)
+                allocations[short_name] = instances
+                logger.info(f"[HAModelAlloc] ✅ 关键模型 {model_spec.pretty_name}: "
+                           f"{len(instances)}个实例 (主={instances[0].node_id}, key={short_name}, 原始ID={model_spec.model_id})")
 
         # Phase 2: 分配普通模型（尽力而为）
         for model_spec in normal_models:
@@ -674,9 +689,10 @@ class HAModelAllocator:
             )
 
             if instances:
-                allocations[model_spec.model_id] = instances
+                short_name = _get_short_name(model_spec)
+                allocations[short_name] = instances
                 logger.debug(f"[HAModelAlloc] ✅ 普通模型 {model_spec.pretty_name}: "
-                           f"{len(instances)}个实例")
+                           f"{len(instances)}个实例 (key={short_name})")
 
         return allocations, node_usage
 

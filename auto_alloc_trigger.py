@@ -66,6 +66,11 @@ class TriggerConfig:
     AUTO_INIT_ON_STARTUP: bool = True     # 启动时是否自动初始化
     STARTUP_DELAY_SECONDS: int = 30       # 启动后延迟30秒再初始化（等待节点连接）
 
+    # ✅ 新增：加载确认机制（解决WS推送≠加载完成的问题）
+    WAIT_FOR_CONFIRMATION: bool = True     # 是否等待模型真正加载完成再确认
+    CONFIRMATION_TIMEOUT: int = 120        # 确认超时时间（秒）- 2分钟内必须看到模型
+    CONFIRMATION_CHECK_INTERVAL: int = 5   # 检查间隔（秒）- 每5秒查询一次节点状态
+
     # 日志保留
     MAX_HISTORY: int = 100                # 最大保留历史记录数
 
@@ -155,6 +160,12 @@ class AutoAllocTrigger:
         self._is_running: bool = False                   # 是否运行中
         self._monitor_task: Optional[asyncio.Task] = None
 
+        # 待重试模型队列（需要更多节点才能分配）
+        self._pending_models: List[Dict] = []           # [{model, reason, min_nodes_required, instance_id}]
+
+        # 稳定性管理器（用于防抖）
+        self._stability_manager: Optional[Any] = None
+
         # 事件历史
         self.event_history: List[AllocationEvent] = []
 
@@ -165,6 +176,16 @@ class AutoAllocTrigger:
                    f"(启用={self.config.ENABLED}, "
                    f"策略={self.config.DEFAULT_STRATEGY}, "
                    f"启动初始化={self.config.AUTO_INIT_ON_STARTUP})")
+
+    def set_stability_manager(self, stability_manager):
+        """
+        设置稳定性管理器（集成防抖机制）
+
+        Args:
+            stability_manager: NodeStabilityManager 实例
+        """
+        self._stability_manager = stability_manager
+        logger.info(f"[AutoAllocTrigger] 🔗 已连接稳定性管理器 (防抖已增强)")
 
     def set_callback(self, callback: Callable[[AllocationEvent], None]):
         """设置分配完成后的回调函数"""
@@ -291,7 +312,7 @@ class AutoAllocTrigger:
         current_state: Dict[str, Any]
     ) -> Tuple[bool, str]:
         """
-        评估是否应该触发自动分配
+        评估是否应该触发自动分配（含防抖检查）
 
         Returns:
             (should_trigger, reason)
@@ -300,6 +321,14 @@ class AutoAllocTrigger:
         current_nodes = current_state["online_node_count"]
         current_memory = current_state["total_memory_mb"]
         current_models = current_state["loaded_models_count"]
+
+        # 条件0: 稳定性防抖检查（最重要！）
+        if self._stability_manager and current_nodes > 0:
+            stability_check, stability_reason = self._check_all_nodes_stability(
+                current_state.get("online_node_ids", [])
+            )
+            if not stability_check:
+                return False, f"🛡️ 防抖保护: {stability_reason}"
 
         # 条件1: 最少在线节点数
         if current_nodes < self.config.MIN_ONLINE_NODES:
@@ -352,6 +381,94 @@ class AutoAllocTrigger:
             return False, "无显著变化"
 
         return True, "; ".join(change_reasons)
+
+    def _check_all_nodes_stability(self, online_node_ids: List[str]) -> Tuple[bool, str]:
+        """
+        检查所有在线节点的稳定性（防抖核心逻辑）
+
+        防抖层级（由松到严）：
+        1. 观察期 (60s) - 节点刚上线，等待确认稳定
+        2. 抖动检测 (5min内3次) - 频繁上下线，标记为 FLAPPING
+        3. 极不稳定 (1h内10次) - 标记为 UNSTABLE，禁止自动操作
+        4. 冷却期 (180s) - 上次分配后的冷却时间
+
+        Args:
+            online_node_ids: 当前在线节点ID列表
+
+        Returns:
+            (is_stable, reason)
+            - is_stable=True: 所有节点都稳定，可以触发分配
+            - is_stable=False: 存在不稳定节点，附带原因
+        """
+        if not self._stability_manager:
+            return True, "未连接稳定性管理器（跳过防抖检查）"
+
+        unstable_nodes = []
+        stable_nodes = []
+
+        for node_id in online_node_ids:
+            try:
+                should_allocate, reason = self._stability_manager.should_trigger_reallocation(node_id)
+
+                # should_trigger_reallocation 返回的逻辑：
+                # - True + "节点已确认离线" → 这是离线节点，不应该出现在online列表中
+                # - False + 各种原因 → 节点不稳定或不适合操作
+
+                if not should_allocate:
+                    # 检查具体的不稳定类型
+                    if "抖动" in reason or "flapping" in reason.lower():
+                        unstable_nodes.append(f"{node_id}(抖动中)")
+                    elif "观察期" in reason or "观察" in reason:
+                        unstable_nodes.append(f"{node_id}(观察期)")
+                    elif "冷却" in reason or "cooldown" in reason.lower():
+                        unstable_nodes.append(f"{node_id}(冷却期)")
+                    elif "不稳定" in reason or "unstable" in reason.lower():
+                        unstable_nodes.append(f"{node_id}(极不稳定)")
+                    elif "离线" in reason or "offline" in reason.lower():
+                        # 这个节点可能刚掉线，忽略
+                        pass
+                    else:
+                        # 其他原因也视为不稳定
+                        unstable_nodes.append(f"{node_id}({reason})")
+                else:
+                    # should_allocate=True 通常意味着 "未知节点" 或 "已确认离线"
+                    # 对于在线节点，我们认为是稳定的
+                    if "未知节点" in reason:
+                        stable_nodes.append(node_id)
+                    # "已确认离线" 不应该出现，但如果出现了说明数据不一致
+
+            except Exception as e:
+                logger.warning(f"[AutoAllocTrigger] ⚠️ 检查节点 {node_id} 稳定性时出错: {e}")
+                # 出错时保守处理：视为不稳定
+                unstable_nodes.append(f"{node_id}(检查失败)")
+
+        # 判断结果
+        if unstable_nodes:
+            total = len(online_node_ids)
+            unstable_count = len(unstable_nodes)
+
+            if unstable_count == total:
+                # 所有节点都不稳定
+                return False, f"所有{total}个节点均不稳定: {', '.join(unstable_nodes)}"
+            else:
+                # 部分节点不稳定 → 根据配置决定是否允许
+                unstable_ratio = unstable_count / total
+
+                if unstable_ratio > 0.5:
+                    # 超过50%节点不稳定 → 禁止触发
+                    return False, (
+                        f"{unstable_count}/{total} 个节点不稳定 "
+                        f"(>{int(unstable_ratio*100)}%): {', '.join(unstable_nodes)}"
+                    )
+                else:
+                    # 少数节点不稳定 → 允许但记录警告
+                    logger.warning(
+                        f"[AutoAllocTrigger] ⚠️ 部分节点不稳定但仍继续: "
+                        f"{unstable_nodes} (稳定节点: {stable_nodes})"
+                    )
+                    return True, f"部分节点不稳定但可接受: {unstable_nodes}"
+
+        return True, "所有节点均稳定"
 
     async def evaluate_and_allocate(
         self,
@@ -412,6 +529,55 @@ class AutoAllocTrigger:
                 logger.warning("[AutoAllocTrigger] ⏭️ 跳过: 无在线节点")
                 self._record_event(event)
                 return event
+
+            # Step 4.5: 新节点加入时，重试待分配的 pending 模型
+            retried_models = []
+            if self._pending_models and current_state["online_node_count"] > self._last_node_count:
+                logger.info(f"[AutoAllocTrigger] 🔄 检测到新节点加入 ({self._last_node_count} → {current_state['online_node_count']}), "
+                           f"尝试重试 {len(self._pending_models)} 个待分配模型...")
+                for pending in list(self._pending_models):  # copy to allow modification during iteration
+                    try:
+                        # 重新调用 load_model_to_cluster
+                        spec = None
+                        from auto_model_allocator import get_model_library, MODEL_LIBRARY
+                        model_lib = get_model_library() or MODEL_LIBRARY
+                        for key, lib_spec in model_lib.items():
+                            if lib_spec.model_id == pending["model"]:
+                                spec = lib_spec
+                                break
+
+                        if not spec:
+                            continue
+
+                        raw_model_path = getattr(spec, 'model_path', None) or ""
+                        if raw_model_path in ["", "./", "./models", "models", "."]:
+                            model_path = spec.model_id
+                        else:
+                            model_path = raw_model_path
+
+                        result = await self.manager.load_model_to_cluster(
+                            model_id=pending["model"],  # 用短名（如 "qwen-3-4b"）
+                            model_path=model_path,  # HF repo ID 在这里
+                            n_layers=spec.total_layers,
+                            strategy="smart",
+                            auto_instance=True
+                        )
+
+                        if result.get("success", False):
+                            retried_models.append(pending["model"])
+                            self._pending_models.remove(pending)
+                            logger.info(f"[AutoAllocTrigger] ✅ 待分配模型重试成功: {pending['model']}")
+                        elif result.get("status") != "pending_more_nodes":
+                            # 真正失败了（不是 pending），从队列移除
+                            self._pending_models.remove(pending)
+                            logger.warning(f"[AutoAllocTrigger] ❌ 待分配模型重试失败: {pending['model']} - {result.get('error')}")
+                        # else: 仍然是 pending，保留在队列中
+
+                    except Exception as retry_err:
+                        logger.error(f"[AutoAllocTrigger] ❌ 待分配模型重试异常: {pending['model']} - {retry_err}")
+
+                if retried_models:
+                    logger.info(f"[AutoAllocTrigger] 🔄 重试完成: {len(retried_models)}/{len(self._pending_models)+len(retried_models)} 个模型成功")
 
             # Step 5: 生成HA分配方案（推荐使用高可用模式）
             logger.info(f"[AutoAllocTrigger] 📋 正在生成分配方案 (策略={self.config.DEFAULT_STRATEGY})...")
@@ -478,20 +644,171 @@ class AutoAllocTrigger:
                 logger.info(f"[AutoAllocTrigger] 🚀 开始执行分配 ({plan.total_models}个模型)...")
 
                 try:
-                    # TODO: 这里需要实际调用GPU池接口来加载模型
-                    # 目前是模拟实现，实际需要对接 gpu_pool_integration
+                    # ✅ 真正执行模型加载
+                    allocated_count = 0
+                    failed_models = []
+                    pending_models = []  # 需要更多节点的模型（等待重试）
 
-                    # 模拟执行过程
-                    await asyncio.sleep(0.5)
+                    # 兼容两种分配方案类型
+                    # HAAllocationPlan 使用 plan.instances
+                    # ModelAllocationPlan 使用 plan.allocations
+                    model_items = []
+                    if hasattr(plan, 'instances') and plan.instances:
+                        # HA模式：{model_id: [ModelInstance, ...]}
+                        model_items = list(plan.instances.items())
+                        logger.info(f"[AutoAllocTrigger] 📋 使用HA方案 (instances格式)")
+                    elif hasattr(plan, 'allocations') and plan.allocations:
+                        # 普通模式：{model_id: {node_id: {...}}}
+                        model_items = list(plan.allocations.items())
+                        logger.info(f"[AutoAllocTrigger] 📋 使用普通方案 (allocations格式)")
+                    else:
+                        logger.warning(f"[AutoAllocTrigger] ⚠️ 方案为空或格式未知")
 
-                    event.execution_success = True
-                    event.models_allocated = plan.total_models  # 假设全部成功
+                    # 遍历方案中的每个模型
+                    for model_id, alloc_data in model_items:
+                        try:
+                            # 🔍 调试：确认 model_id 来源（应该是短名如 "qwen-3-4b"，而非 HF repo ID）
+                            if "/" in model_id:
+                                logger.error(f"[AutoAllocTrigger] ❌ model_id 是 HF repo ID (含'/'): '{model_id}' ← ha_model_allocator 修复未生效!")
+                            else:
+                                logger.debug(f"[AutoAllocTrigger] ✅ model_id 是短名: '{model_id}'")
 
-                    # 更新时间戳
-                    self._last_allocation_time = time.time()
+                            instance_count = len(alloc_data) if isinstance(alloc_data, (list, dict)) else 1
+                            logger.info(f"[AutoAllocTrigger] 📦 正在加载模型: {model_id} ({instance_count}个实例/分片)")
 
-                    logger.info(f"[AutoAllocTrigger] ✅ 分配执行成功: "
-                               f"{event.models_allocated}/{event.models_total} 个模型已加载")
+                            # 查找模型规格（支持短名和完整ID两种方式）
+                            from auto_model_allocator import MODEL_LIBRARY, ModelSpec
+                            spec: ModelSpec = None
+
+                            # 方式1：直接用model_id查找（可能是短名如 "qwen3-0.6b"）
+                            spec = MODEL_LIBRARY.get(model_id)
+
+                            # 方式2：如果找不到，遍历所有值匹配 model_id 字段
+                            if not spec:
+                                for lib_spec in MODEL_LIBRARY.values():
+                                    if lib_spec.model_id == model_id or lib_spec.model_id.lower() == model_id.lower():
+                                        spec = lib_spec
+                                        break
+
+                            # 方式3：大小写不敏感的模糊匹配
+                            if not spec:
+                                model_id_lower = model_id.lower()
+                                for key, lib_spec in MODEL_LIBRARY.items():
+                                    if key == model_id_lower or model_id_lower in key or key in model_id_lower:
+                                        spec = lib_spec
+                                        logger.info(f"[AutoAllocTrigger] 🔍 模糊匹配: '{model_id}' → '{key}'")
+                                        break
+
+                            if not spec:
+                                logger.warning(f"[AutoAllocTrigger] ⚠️ 未找到模型规格: {model_id}")
+                                failed_models.append({"model": model_id, "reason": "未知模型"})
+                                continue
+
+                            # 调用集群管理器的 load_model_to_cluster 方法
+                            # model_path 必须是有效的 HuggingFace repo_id（节点端会校验非空）
+                            raw_model_path = getattr(spec, 'model_path', None) or ""
+                            # 无效路径 → 直接用 model_id (HF Repo ID) 作为路径
+                            if raw_model_path in ["", "./", "./models", "models", "."]:
+                                model_path = spec.model_id  # 如 "Qwen/Qwen3-0.6B"
+                                logger.info(f"[AutoAllocTrigger] 📂 使用 HF Repo ID 作为路径: {model_path}")
+                            else:
+                                model_path = raw_model_path
+
+                            result = await self.manager.load_model_to_cluster(
+                                model_id=model_id,  # 用短名（如 "qwen-3-4b"），而非 HF repo ID
+                                model_path=model_path,  # HF repo ID 在这里（如 "Qwen/Qwen3-4B"）
+                                n_layers=spec.total_layers,  # 使用 total_layers 而不是 n_layers
+                                strategy="smart",  # 智能策略：单节点优先
+                                auto_instance=True  # 自动生成实例ID（支持多实例）
+                            )
+
+                            if result.get("success", False):
+                                # ⚠️ 注意：success=True 只表示任务推送成功，不代表模型已真正加载
+                                # 需要等待实际加载完成后才能确认
+                                loaded_nodes = [r["node_id"] for r in result.get("results", []) if r.get("success")]
+                                push_method = result.get("results", [{}])[0].get("method", "unknown") if result.get("results") else "unknown"
+
+                                logger.info(f"[AutoAllocTrigger] 📤 {model_id} 任务推送成功 → 节点: {loaded_nodes} (方式: {push_method})")
+
+                                # ✅ 新增：等待实际加载完成（异步确认）
+                                if self.config.WAIT_FOR_CONFIRMATION:
+                                    try:
+                                        wait_result = await self._wait_for_model_loaded(
+                                            model_id=model_id,
+                                            full_model_id=f"{model_id}::{result.get('instance_id', 'unknown')}",
+                                            timeout=self.config.CONFIRMATION_TIMEOUT,
+                                            check_interval=5
+                                        )
+
+                                        if wait_result["confirmed"]:
+                                            allocated_count += 1
+                                            logger.info(f"[AutoAllocTrigger] ✅ {model_id} 加载确认完成 → 节点: {wait_result.get('loaded_on_nodes', [])}")
+                                        else:
+                                            # 推送成功但未能在超时时间内确认
+                                            failed_models.append({
+                                                "model": model_id,
+                                                "reason": f"超时未确认 ({wait_result.get('reason', '未知')})"
+                                            })
+                                            logger.warning(f"[AutoAllocTrigger] ⚠️ {model_id} 推送成功但未确认: {wait_result.get('reason', '未知')}")
+                                    except Exception as confirm_err:
+                                        # 确认过程出错，但推送本身成功了，算作部分成功
+                                        allocated_count += 1
+                                        logger.warning(f"[AutoAllocTrigger] ⚠️ {model_id} 确认检查异常，但推送已成功: {confirm_err}")
+                                else:
+                                    # 不等待确认，直接计数（快速模式）
+                                    allocated_count += 1
+                                    logger.info(f"[AutoAllocTrigger] ✅ {model_id} 推送成功 (跳过确认)")
+                            else:
+                                error_msg = result.get("error", "未知错误")
+                                # 检查是否为 pending_more_nodes 状态
+                                if result.get("status") == "pending_more_nodes":
+                                    pending_models.append({
+                                        "model": model_id,
+                                        "reason": error_msg,
+                                        "min_nodes_required": result.get("min_nodes_required", 0),
+                                        "instance_id": result.get("instance_id", "")
+                                    })
+                                    logger.warning(f"[AutoAllocTrigger] ⏳ {model_id} 需要更多节点 (≥{result.get('min_nodes_required', '?')}个), 已加入等待队列")
+                                else:
+                                    failed_models.append({"model": model_id, "reason": error_msg})
+                                    logger.error(f"[AutoAllocTrigger] ❌ {model_id} 加载失败: {error_msg}")
+
+                        except Exception as model_err:
+                            failed_models.append({"model": model_id, "reason": str(model_err)})
+                            logger.error(f"[AutoAllocTrigger] ❌ {model_id} 加载异常: {model_err}", exc_info=True)
+
+                    # 更新事件结果
+                    event.execution_success = (allocated_count > 0)
+                    event.models_allocated = allocated_count
+
+                    if allocated_count > 0:
+                        # 更新时间戳（只在真正有变化时更新）
+                        self._last_allocation_time = time.time()
+
+                        logger.info(f"[AutoAllocTrigger] ✅ 分配执行完成: "
+                                   f"{allocated_count}/{event.models_total} 个模型已加载")
+                        if failed_models:
+                            logger.warning(f"[AutoAllocTrigger] ⚠️ {len(failed_models)} 个模型加载失败: "
+                                         f"{[f['model'] for f in failed_models]}")
+                        if pending_models:
+                            logger.info(f"[AutoAllocTrigger] ⏳ {len(pending_models)} 个模型等待更多节点: "
+                                       f"{[p['model'] for p in pending_models]}")
+                            # 存储待重试的模型，新节点加入时自动重试
+                            self._pending_models = pending_models
+                    else:
+                        event.execution_success = False
+                        # 区分：全部失败 vs 全部等待 vs 混合
+                        if pending_models and not failed_models:
+                            event.error = f"所有模型需要更多节点: {pending_models}"
+                            logger.warning(f"[AutoAllocTrigger] ⏳ 所有模型等待更多节点: {pending_models}")
+                            self._pending_models = pending_models
+                        elif pending_models:
+                            event.error = f"部分失败+部分等待: 失败={failed_models}, 等待={pending_models}"
+                            logger.warning(f"[AutoAllocTrigger] ⚠️ 部分失败+部分等待: 失败={[f['model'] for f in failed_models]}, 等待={[p['model'] for p in pending_models]}")
+                            self._pending_models = pending_models
+                        else:
+                            event.error = f"所有模型加载失败: {failed_models}"
+                            logger.error(f"[AutoAllocTrigger] ❌ 所有模型加载失败: {failed_models}")
 
                 except Exception as e:
                     event.execution_success = False
@@ -527,8 +844,26 @@ class AutoAllocTrigger:
             self.event_history = self.event_history[-self.config.MAX_HISTORY:]
 
     def get_status(self) -> Dict[str, Any]:
-        """获取触发器状态"""
+        """获取触发器状态（含防抖信息）"""
         last_event = self.event_history[-1] if self.event_history else None
+
+        # 收集稳定性信息
+        stability_info = None
+        if self._stability_manager:
+            try:
+                stability_info = {
+                    "connected": True,
+                    "tracked_nodes": len(self._stability_manager.records),
+                    "config": {
+                        "observation_period_sec": getattr(self._stability_manager, 'OBSERVATION_PERIOD', 60),
+                        "cooldown_period_sec": getattr(self._stability_manager, 'COOLDOWN_PERIOD', 180),
+                        "flap_threshold_5min": getattr(self._stability_manager, 'FLAP_THRESHOLD_5MIN', 3),
+                    }
+                }
+            except Exception as e:
+                stability_info = {"connected": False, "error": str(e)}
+        else:
+            stability_info = {"connected": False, "note": "未连接稳定性管理器"}
 
         return {
             "enabled": self.config.ENABLED,
@@ -538,7 +873,11 @@ class AutoAllocTrigger:
                 "auto_execute": self.config.AUTO_EXECUTE,
                 "cooldown_seconds": self.config.COOLDOWN_SECONDS,
                 "min_online_nodes": self.config.MIN_ONLINE_NODES,
+                # 新增：加载确认配置
+                "wait_for_confirmation": self.config.WAIT_FOR_CONFIRMATION,
+                "confirmation_timeout_sec": self.config.CONFIRMATION_TIMEOUT,
             },
+            "stability_protection": stability_info,  # 防抖信息
             "state": {
                 "last_allocation_time": self._last_allocation_time,
                 "last_node_count": self._last_node_count,
@@ -552,10 +891,108 @@ class AutoAllocTrigger:
             )
         }
 
+
     def get_history(self, limit: int = 20) -> List[Dict]:
         """获取事件历史"""
         recent = self.event_history[-limit:]
         return [e.to_dict() for e in reversed(recent)]
+
+    async def _wait_for_model_loaded(
+        self,
+        model_id: str,
+        full_model_id: str,
+        timeout: int = 120,
+        check_interval: int = 5
+    ) -> Dict[str, Any]:
+        """
+        等待模型真正加载完成（通过查询节点实际状态确认）
+
+        重要：不能使用 connector.loaded_models，因为它在WS推送时就乐观更新了（假阳性）。
+              必须使用 gRPC CollectTopology 返回的节点真实状态。
+        """
+        import asyncio
+
+        start_time = time.time()
+        # 初始宽限期：跳过乐观更新窗口（WS推送后connector会立即更新loaded_models）
+        initial_grace_period = 5.0  # 秒
+
+        logger.info(f"[AutoAllocTrigger] ⏳ 开始等待模型加载确认: {full_model_id} (超时: {timeout}s, 宽限期: {initial_grace_period}s)")
+
+        while True:
+            elapsed = time.time() - start_time
+
+            # 检查超时
+            if elapsed > timeout:
+                logger.warning(
+                    f"[AutoAllocTrigger] ⏰ 确认超时: {full_model_id} "
+                    f"({timeout:.0f}s内未检测到模型)"
+                )
+                return {
+                    "confirmed": False,
+                    "loaded_on_nodes": [],
+                    "reason": f"超时 ({timeout:.0f}s)",
+                    "elapsed_time": elapsed
+                }
+
+            # 宽限期内跳过检查（避免读取到乐观更新的假数据）
+            if elapsed < initial_grace_period:
+                await asyncio.sleep(min(check_interval, initial_grace_period - elapsed + 0.1))
+                continue
+
+            # 查询节点真实状态（通过gRPC，而非connector的乐观缓存）
+            try:
+                loaded_on_nodes = []
+
+                if hasattr(self.manager, 'nodes'):
+                    for node_id, node in self.manager.nodes.items():
+                        if node.status.value != "online":
+                            continue
+
+                        # 使用节点已加载模型列表（来自 gRPC CollectTopology 或 WS 回调）
+                        # 优先级：loaded_models（已验证可靠） > loaded_models_from_grpc
+                        real_models = None
+
+                        # 方式1：直接使用 node.loaded_models（最可靠，由监控循环/WS回调维护）
+                        if hasattr(node, 'loaded_models') and node.loaded_models:
+                            real_models = [m.get("model_id", "") for m in node.loaded_models]
+
+                        # 方式2：回退到 gRPC 专用字段（如果有）
+                        if not real_models:
+                            real_models = getattr(node, 'loaded_models_from_grpc', None)
+                        if not real_models:
+                            real_models = getattr(node, '_grpc_loaded_models', None)
+
+                        if real_models:
+                            if any(
+                                full_model_id in str(m) or model_id in str(m)
+                                for m in real_models
+                            ):
+                                loaded_on_nodes.append(node_id)
+
+                # 判断结果
+                if loaded_on_nodes:
+                    logger.info(
+                        f"[AutoAllocTrigger] ✅ 确认成功: {full_model_id} "
+                        f"已加载到节点 {loaded_on_nodes} (耗时 {elapsed:.1f}s)"
+                    )
+                    return {
+                        "confirmed": True,
+                        "loaded_on_nodes": loaded_on_nodes,
+                        "reason": "gRPC状态确认",
+                        "elapsed_time": elapsed
+                    }
+                else:
+                    if int(elapsed) % 10 == 0:
+                        logger.info(
+                            f"[AutoAllocTrigger] ⏳ 等待中... {full_model_id} "
+                            f"(已等待 {elapsed:.0f}s/{timeout}s)"
+                        )
+
+            except Exception as check_err:
+                logger.warning(f"[AutoAllocTrigger] ⚠️ 检查模型状态异常: {check_err}")
+
+            await asyncio.sleep(check_interval)
+
 
     async def manual_trigger(self, reason: str = "用户手动触发", force: bool = True) -> AllocationEvent:
         """

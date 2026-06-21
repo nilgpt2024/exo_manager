@@ -1946,6 +1946,7 @@ let availableModels = [];
 let selectedModel = '';
 let isStreaming = false;
 const chatHistory = [];  // 对话上下文记录
+let _msgIdCounter = 0;   // 消息 ID 计数器，避免 Date.now() 冲突
 
 // ==================== 初始化 ====================
 async function init() {
@@ -2084,7 +2085,7 @@ function addMessage(content, role, streaming = false) {
         chatHistory.push({ role, content });
     }
 
-    const id = 'msg_' + Date.now();
+    const id = 'msg_' + (++_msgIdCounter);
     const div = document.createElement('div');
     div.className = `message ${role}`;
     div.id = id;
@@ -2365,7 +2366,31 @@ function formatTime(timestamp) {
 
 // ==================== 工具函数 ====================
 function copyText(text) {
-    navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'success'));
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板', 'success')).catch(() => _copyFallback(text));
+    } else {
+        _copyFallback(text);
+    }
+}
+
+function _copyFallback(text) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '-9999px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+        var ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (ok) showToast('已复制到剪贴板', 'success');
+        else showToast('复制失败，请手动选择复制', 'error');
+    } catch (e) {
+        document.body.removeChild(ta);
+        showToast('复制失败，请手动选择复制', 'error');
+    }
 }
 
 function showToast(msg, type = 'success') {
@@ -2703,9 +2728,7 @@ function renderConnectionInfo(data) {
 function copyCommand() {
     var d = getSelectedNodeData();
     if (!d || !d.launch_command) return;
-    navigator.clipboard.writeText(d.launch_command).then(() => {
-        showToast('命令已复制到剪贴板');
-    });
+    copyText(d.launch_command);
 }
 
 // ==================== 一键启动脚本 ====================

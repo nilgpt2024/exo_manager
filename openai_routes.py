@@ -381,11 +381,14 @@ def _find_target_node(model_id: str) -> Optional[tuple]:
     找到处理指定模型的目标节点（使用负载均衡器）
 
     Returns:
-        (node_id, node_url) 或 None
+        (node_id, node_url, full_model_id) 或 None
+        full_model_id 包含 instance_id（如 "Qwen/Qwen3-4B::worker-1"）
     """
     manager = _get_manager()
     if not manager:
         return None
+
+    full_model_id = None  # LoadBalancer 选中的完整 model_id（含 instance）
 
     try:
         lb = getattr(manager, 'load_balancer', None)
@@ -399,15 +402,16 @@ def _find_target_node(model_id: str) -> Optional[tuple]:
                 connector = manager.connectors.get(node_id)
                 if connector:
                     node_url = connector.node_info.chatgpt_url
-                    logger.info(f"[LoadBalancer] ✅ 选择节点: {node_id} (策略=round_robin, 实例={result.selected_instance.instance_id})")
-                    return (node_id, node_url)
+                    full_model_id = result.selected_instance.full_model_id
+                    logger.info(f"[LoadBalancer] ✅ 选择节点: {node_id} (策略=round_robin, 实例={result.selected_instance.instance_id}, full_id={full_model_id})")
+                    return (node_id, node_url, full_model_id)
         else:
             logger.warning("[LoadBalancer] ⚠️ 未找到 load_balancer 实例")
     except Exception as e:
         logger.error(f"[LoadBalancer] ❌ 负载均衡失败: {e}, 回退到默认逻辑")
 
     # Fallback: 遍历所有在线节点的已加载模型
-    candidate_nodes = []  # [(node_id, start_layer, url), ...]
+    candidate_nodes = []  # [(node_id, start_layer, url, full_model_id), ...]
     first_layer_nodes = []  # 所有首层节点（多副本场景可能有多个）
 
     for node_id, connector in manager.connectors.items():
@@ -421,21 +425,21 @@ def _find_target_node(model_id: str) -> Optional[tuple]:
                 start_layer = shard.get("start_layer", -1)
                 is_first_layer = start_layer == 0 or (start_layer == -1)
                 url = connector.node_info.chatgpt_url
-                candidate_nodes.append((node_id, start_layer, url))
+                candidate_nodes.append((node_id, start_layer, url, mid))
                 if is_first_layer:
-                    first_layer_nodes.append((node_id, url))
+                    first_layer_nodes.append((node_id, url, mid))
                 break
 
     # 多副本负载均衡：在多个首层节点间轮询
     if len(first_layer_nodes) > 1:
         import random
-        node_id, url = random.choice(first_layer_nodes)  # 简单随机，可后续升级为轮询
-        logger.info(f"[LoadBalancer-Fallback] 🔄 多副本模式: {len(first_layer_nodes)} 个首层节点, 选择 {node_id}")
-        return (node_id, url)
+        node_id, url, fmid = random.choice(first_layer_nodes)  # 简单随机，可后续升级为轮询
+        logger.info(f"[LoadBalancer-Fallback] 🔄 多副本模式: {len(first_layer_nodes)} 个首层节点, 选择 {node_id} (full_id={fmid})")
+        return (node_id, url, fmid)
     elif first_layer_nodes:
         return first_layer_nodes[0]
     elif candidate_nodes:
-        return (candidate_nodes[0][0], candidate_nodes[0][2])
+        return candidate_nodes[0]
 
     return None
 
@@ -469,7 +473,15 @@ async def _proxy_to_node(
         yield b"data: [DONE]\n\n"
         return
 
-    node_id, node_url = target
+    node_id, node_url = target[0], target[1]
+    full_model_id = target[2] if len(target) > 2 else None
+
+    # 🔑 关键修复：用 LoadBalancer 选中的 full_model_id（含 instance）覆盖请求体
+    # 这样节点端收到的 model 就是 "Qwen/Qwen3-4B::worker-1" 而非 "qwen-3-4b"
+    # 避免 instance 不匹配导致重复加载全量模型
+    if full_model_id:
+        request_body["model"] = full_model_id
+        logger.info(f"[Proxy] 🔑 使用完整模型ID转发: {model_id} → {full_model_id}")
     start_time = time.time()
 
     # 🔍 [诊断] 打印代理目标 URL（排查 ConnectTimeout）

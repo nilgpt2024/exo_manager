@@ -5,8 +5,8 @@ EXO Cluster Manager - 用户认证和权限管理模块
 提供用户登录、权限控制和会话管理功能
 
 支持的登录方式:
-- 微信扫码登录 (OAuth2 - 需要配置微信开放平台)
-- 管理员账号密码登录
+- 邮箱密码登录
+- 二维码模拟登录 (开发/测试用)
 
 权限角色:
 - admin: 管理员，可访问所有功能
@@ -17,8 +17,6 @@ EXO Cluster Manager - 用户认证和权限管理模块
     "users": [
         {
             "id": "uuid",
-            "union_id": "微信unionid",
-            "openid": "微信openid",
             "nickname": "昵称",
             "avatar": "头像URL",
             "role": "user|admin",
@@ -32,16 +30,6 @@ EXO Cluster Manager - 用户认证和权限管理模块
             "created_at": 1234567890,
             "expires_at": 1234567890
         }
-    }
-}
-
-微信配置文件 (wechat_config.json):
-{
-    "wechat": {
-        "app_id": "",
-        "app_secret": "",
-        "redirect_uri": "http://localhost:8080/auth/wechat/callback",
-        "scope": "snsapi_login"
     }
 }
 """
@@ -294,8 +282,6 @@ class PasswordPolicy:
 class User:
     """用户数据模型"""
     id: str
-    union_id: str = ""
-    openid: str = ""
     nickname: str = ""
     avatar: str = ""
     role: str = "user"
@@ -313,11 +299,18 @@ class User:
     @classmethod
     def from_dict(cls, data: Dict) -> "User":
         safe_data = data.copy()
-        
+
+        # 确保必要字段存在
         for field in ['website_password', 'website_password_hash']:
             if field not in safe_data:
                 safe_data[field] = ''
-        
+
+        # 过滤掉未知的字段（避免新增字段导致兼容性问题）
+        import dataclasses
+        if dataclasses.is_dataclass(cls):
+            valid_fields = {f.name for f in dataclasses.fields(cls)}
+            safe_data = {k: v for k, v in safe_data.items() if k in valid_fields}
+
         return cls(**safe_data)
 
     def to_public_dict(self) -> Dict:
@@ -337,7 +330,6 @@ class AuthManager:
     用户认证管理器
 
     负责:
-    - 微信扫码登录流程管理 (OAuth2)
     - 用户数据持久化
     - Session 管理
     - 权限验证
@@ -354,89 +346,7 @@ class AuthManager:
         self._login_qrcodes: Dict[str, Dict] = {}  # qrcode_id -> qrcode info
         self._login_attempts: Dict[str, Dict] = {}  # ip -> {count, last_attempt, locked_until}
 
-        # 微信配置
-        self.wechat_config: Dict = {}
-        self.wechat_enabled = False
-        self._load_wechat_config()
-
         self._load_data()
-
-    def _load_wechat_config(self):
-        """
-        加载微信登录配置
-
-        安全改进: 优先从环境变量读取敏感配置 (AppSecret)
-        环境变量优先级高于配置文件
-        """
-        # 1. 尝试从环境变量读取 (推荐生产环境)
-        env_app_id = os.getenv("WECHAT_APP_ID", "").strip()
-        env_app_secret = os.getenv("WECHAT_APP_SECRET", "").strip()
-
-        if env_app_id and env_app_secret:
-            logger.info("✅ 从环境变量加载微信配置 (安全模式)")
-            self.wechat_config = {
-                "app_id": env_app_id,
-                "app_secret": env_app_secret,
-                "redirect_uri": os.getenv(
-                    "WECHAT_REDIRECT_URI",
-                    "http://localhost:8080/auth/wechat/callback"
-                ),
-                "scope": os.getenv("WECHAT_SCOPE", "snsapi_login"),
-                "state_prefix": os.getenv("WECHAT_STATE_PREFIX", "exo_"),
-                "mini_appid": os.getenv("WECHAT_MINI_APPID", ""),
-                "mini_secret": os.getenv("WECHAT_MINI_SECRET", ""),
-            }
-            self.wechat_enabled = True
-            logger.info(f"微信登录已启用 (AppID: {env_app_id[:8]}...)")
-            return
-
-        # 2. 回退到配置文件 (开发模式)
-        config_path = Path(__file__).parent / "wechat_config.json"
-
-        if not config_path.exists():
-            logger.warning("微信配置文件不存在且未设置环境变量，将使用模拟登录模式")
-            self.wechat_enabled = False
-            return
-
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = json.load(f)
-
-            wechat = config.get("wechat", {})
-            app_id = wechat.get("app_id", "").strip()
-            app_secret = wechat.get("app_secret", "").strip()
-
-            if not app_id or not app_secret:
-                logger.warning("微信 AppID 或 AppSecret 未配置，将使用模拟登录模式")
-                self.wechat_enabled = False
-                return
-
-            # ⚠️ 安全警告: 从配置文件读取密钥 (仅建议用于开发)
-            if os.getenv("EXO_ENV", "").lower() in ("production", "prod"):
-                logger.error("❌ 生产环境检测到从配置文件读取微信密钥，请改用环境变量!")
-                self.wechat_enabled = False
-                return
-
-            logger.warning("⚠️ 从配置文件加载微信密钥 (仅用于开发环境)")
-
-            self.wechat_config = {
-                "app_id": app_id,
-                "app_secret": app_secret,
-                "redirect_uri": wechat.get(
-                    "redirect_uri",
-                    "http://localhost:8080/auth/wechat/callback"
-                ),
-                "scope": wechat.get("scope", "snsapi_login"),
-                "state_prefix": wechat.get("state_prefix", "exo_"),
-                "mini_appid": wechat.get("mini_appid", ""),
-                "mini_secret": wechat.get("mini_secret", ""),
-            }
-            self.wechat_enabled = True
-            logger.info(f"微信登录已启用 (AppID: {app_id[:8]}...)")
-
-        except Exception as e:
-            logger.error(f"加载微信配置失败: {e}")
-            self.wechat_enabled = False
 
     def _load_data(self):
         """从文件加载用户数据"""
@@ -487,40 +397,25 @@ class AuthManager:
         if expired:
             logger.info(f"清理了 {len(expired)} 个过期会话")
 
-    # ==================== 微信扫码登录 (OAuth2) ====================
+    # ==================== 二维码登录 ====================
 
     def create_login_qrcode(self) -> Dict:
         """
-        创建登录二维码
-
-        如果微信已配置: 返回微信授权 URL (用于生成二维码)
-        如果未配置: 返回模拟登录信息
+        创建登录二维码 (模拟模式)
 
         返回:
             {
                 "qrcode_id": "唯一标识",
-                "qrcode_url": "二维码内容URL（用户扫码后跳转）",
+                "qrcode_url": "二维码内容URL",
                 "expires_at": 过期时间戳,
-                "mode": "wechat" | "simulate"
+                "mode": "simulate"
             }
         """
         qrcode_id = secrets.token_urlsafe(16)
         expires_at = time.time() + 300  # 5 分钟有效期
 
-        if self.wechat_enabled:
-            state = f"{self.wechat_config['state_prefix']}{qrcode_id}"
-            qrcode_url = (
-                f"https://open.weixin.qq.com/connect/qrconnect"
-                f"?appid={self.wechat_config['app_id']}"
-                f"&redirect_uri={self.wechat_config['redirect_uri']}"
-                f"&response_type=code"
-                f"&scope={self.wechat_config['scope']}"
-                f"&state={state}#wechat_redirect"
-            )
-            mode = "wechat"
-        else:
-            qrcode_url = f"wechat://login?scene={qrcode_id}"
-            mode = "simulate"
+        qrcode_url = f"simulate://login?scene={qrcode_id}"
+        mode = "simulate"
 
         self._login_qrcodes[qrcode_id] = {
             "qrcode_id": qrcode_id,
@@ -537,240 +432,7 @@ class AuthManager:
             "qrcode_url": qrcode_url,
             "expires_at": expires_at,
             "mode": mode,
-            "enabled": self.wechat_enabled,
         }
-
-    async def create_mini_program_qrcode(self, qrcode_id: str) -> Optional[bytes]:
-        """
-        生成微信小程序码（用于扫码登录）
-
-        调用微信 API 生成小程序码，用户扫码后直接跳转到小程序的 login 页面
-        并携带 scene 参数（即 qrcode_id）
-
-        Args:
-            qrcode_id: 登录会话的唯一标识
-
-        Returns:
-            小程序码图片的二进制数据（PNG格式），失败返回 None
-        """
-        if not self.wechat_enabled:
-            logger.warning("微信未配置，无法生成小程序码")
-            return None
-
-        try:
-            access_token = await self._get_wechat_access_token()
-            if not access_token:
-                return None
-
-            url = f"https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token={access_token}"
-
-            payload = {
-                "scene": qrcode_id,
-                "page": "pages/login/login",
-                "width": 430,
-                "auto_color": False,
-                "line_color": {"r": 7, "g": 193, "b": 96},
-                "is_hyaline": False
-            }
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, json=payload)
-
-            if response.status_code == 200:
-                content_type = response.headers.get("content-type", "")
-                if "image" in content_type:
-                    logger.info(f"小程序码生成成功: {qrcode_id}")
-                    return response.content
-                else:
-                    error_data = response.json()
-                    err_code = error_data.get("errcode", "unknown")
-                    err_msg = error_data.get("errmsg", "未知错误")
-                    logger.error(f"生成小程序码失败: {err_code} - {err_msg}")
-                    return None
-            else:
-                logger.error(f"请求小程序码API失败: HTTP {response.status_code}")
-                return None
-
-        except Exception as e:
-            logger.error(f"生成小程序码异常: {e}")
-            return None
-
-    async def _get_wechat_access_token(self) -> Optional[str]:
-        """
-        获取微信小程序的 access_token
-
-        Returns:
-            access_token 字符串，失败返回 None
-        """
-        app_id = self.wechat_config.get("app_id", "")
-        app_secret = self.wechat_config.get("app_secret", "")
-
-        if not app_id or not app_secret:
-            logger.error("AppID 或 AppSecret 未配置")
-            return None
-
-        token_url = "https://api.weixin.qq.com/cgi-bin/token"
-        params = {
-            "grant_type": "client_credential",
-            "appid": app_id,
-            "secret": app_secret
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(token_url, params=params)
-
-            if response.status_code == 200:
-                data = response.json()
-                if "access_token" in data:
-                    return data["access_token"]
-                else:
-                    err_code = data.get("errcode", "unknown")
-                    err_msg = data.get("errmsg", "未知错误")
-                    logger.error(f"获取 access_token 失败: {err_code} - {err_msg}")
-                    return None
-            else:
-                logger.error(f"请求 access_token API 失败: HTTP {response.status_code}")
-                return None
-
-        except Exception as e:
-            logger.error(f"获取 access_token 异常: {e}")
-            return None
-
-    async def wechat_callback(self, code: str, state: str) -> Tuple[Optional[User], Optional[str], str]:
-        """
-        微信 OAuth2 回调处理
-
-        用 authorization code 换取 access_token 和用户信息
-
-        Args:
-            code: 微信返回的授权码
-            state: 防止 CSRF 的状态参数
-
-        Returns:
-            (user, session_token, error_message)
-        """
-        if not self.wechat_enabled:
-            return None, None, "微信登录未启用"
-
-        # 验证 state 参数
-        prefix = self.wechat_config.get("state_prefix", "exo_")
-        if not state.startswith(prefix):
-            return None, None, "无效的 state 参数"
-
-        qrcode_id = state[len(prefix):]
-        if qrcode_id not in self._login_qrcodes:
-            return None, None, "无效的登录请求"
-
-        try:
-            # Step 1: 用 code 换取 access_token
-            token_url = "https://api.weixin.qq.com/sns/oauth2/access_token"
-            params = {
-                "appid": self.wechat_config["app_id"],
-                "secret": self.wechat_config["app_secret"],
-                "code": code,
-                "grant_type": "authorization_code",
-            }
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(token_url, params=params)
-                token_data = response.json()
-
-            if "errcode" in token_data:
-                err_msg = token_data.get("errmsg", "未知错误")
-                logger.error(f"微信获取 access_token 失败: {err_msg}")
-                return None, None, f"微信认证失败: {err_msg}"
-
-            access_token = token_data["access_token"]
-            openid = token_data["openid"]
-            union_id = token_data.get("union_id", "")
-
-            # Step 2: 用 access_token 获取用户信息
-            user_url = "https://api.weixin.qq.com/sns/userinfo"
-            user_params = {
-                "access_token": access_token,
-                "openid": openid,
-            }
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(user_url, params=user_params)
-                user_data = response.json()
-
-            if "errcode" in user_data:
-                # 可能是未关注公众号，使用基本信息
-                logger.warning(f"获取用户详细信息失败，使用基本信息: {user_data.get('errmsg')}")
-                nickname = f"微信用户_{openid[:8]}"
-                avatar = ""
-            else:
-                nickname = user_data.get("nickname", f"微信用户_{openid[:8]}")
-                avatar = user_data.get("headimgurl", "")
-
-            # Step 3: 查找或创建用户
-            user = await self._find_or_create_wechat_user(
-                union_id=union_id,
-                openid=openid,
-                nickname=nickname,
-                avatar=avatar,
-            )
-
-            # Step 4: 创建 session
-            session_token = self._create_session(user.id)
-
-            # 更新二维码状态
-            if qrcode_id in self._login_qrcodes:
-                self._login_qrcodes[qrcode_id]["status"] = "confirmed"
-                self._login_qrcodes[qrcode_id]["user_info"] = {
-                    "nickname": nickname,
-                    "avatar": avatar,
-                }
-
-            logger.info(f"微信用户 {nickname} 登录成功")
-            return user, session_token, ""
-
-        except httpx.TimeoutException:
-            return None, None, "连接微信服务器超时"
-        except Exception as e:
-            logger.error(f"微信登录回调处理失败: {e}")
-            return None, None, f"登录处理失败: {str(e)}"
-
-    async def _find_or_create_wechat_user(
-        self,
-        union_id: str,
-        openid: str,
-        nickname: str,
-        avatar: str,
-    ) -> User:
-        """查找或创建微信用户"""
-        # 优先通过 union_id 查找
-        if union_id:
-            user = self._find_user_by_union_id(union_id)
-            if user:
-                # 更新 openid 和用户信息
-                if not user.openid:
-                    user.openid = openid
-                if nickname and nickname != user.nickname:
-                    user.nickname = nickname
-                if avatar and avatar != user.avatar:
-                    user.avatar = avatar
-                user.last_login_at = time.time()
-                self._save_data()
-                return user
-
-        # 通过 openid 查找
-        for u in self._users.values():
-            if u.openid == openid:
-                if union_id and not u.union_id:
-                    u.union_id = union_id
-                u.last_login_at = time.time()
-                self._save_data()
-                return u
-
-        # 创建新用户
-        return self._create_user(
-            union_id=union_id or f"wx_{openid}",
-            nickname=nickname,
-            avatar=avatar,
-        )
 
     def get_qrcode_status(self, qrcode_id: str) -> Optional[Dict]:
         """获取二维码状态"""
@@ -791,8 +453,6 @@ class AuthManager:
     def simulate_scan_qrcode(self, qrcode_id: str, user_info: Dict) -> bool:
         """
         模拟用户扫描二维码（用于测试）
-
-        实际场景中，这是由微信服务器回调触发的
         """
         qrcode = self._login_qrcodes.get(qrcode_id)
         if not qrcode:
@@ -821,16 +481,12 @@ class AuthManager:
             return None
 
         user_info = qrcode.get("user_info", {})
-        union_id = user_info.get("union_id", "")
 
-        # 查找或创建用户
-        user = self._find_user_by_union_id(union_id)
-        if not user:
-            user = self._create_user(
-                union_id=union_id,
-                nickname=user_info.get("nickname", "微信用户"),
-                avatar=user_info.get("avatar", ""),
-            )
+        # 创建或查找用户 (模拟模式)
+        user = self._create_user(
+            nickname=user_info.get("nickname", "用户"),
+            avatar=user_info.get("avatar", ""),
+        )
 
         # 更新登录时间
         user.last_login_at = time.time()
@@ -843,106 +499,6 @@ class AuthManager:
         logger.info(f"用户 {user.nickname} 登录成功")
 
         return token
-
-    # ==================== 微信小程序登录 ====================
-
-    def _get_mini_openid(self, code: str) -> Optional[str]:
-        """
-        调用微信 jscode2session API 获取真实 openid
-        
-        开发模式（未配置小程序 appid）下用 code 的 md5 作为 openid
-        
-        Args:
-            code: 小程序登录 code
-            
-        Returns:
-            openid 字符串，失败返回 None
-        """
-        mini_appid = self.wechat_config.get("mini_appid", "")
-        mini_secret = self.wechat_config.get("mini_secret", "")
-        
-        if mini_appid and mini_secret:
-            url = "https://api.weixin.qq.com/sns/jscode2session"
-            params = {
-                "appid": mini_appid,
-                "secret": mini_secret,
-                "js_code": code,
-                "grant_type": "authorization_code"
-            }
-            try:
-                with httpx.Client(timeout=10.0) as client:
-                    resp = client.get(url, params=params)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if "openid" in data:
-                        logger.info(f"微信小程序 openid 获取成功: {data['openid'][:8]}...")
-                        return data["openid"]
-                    else:
-                        err_code = data.get("errcode", "unknown")
-                        err_msg = data.get("errmsg", "未知错误")
-                        logger.error(f"微信 jscode2session 失败: {err_code} - {err_msg}")
-                else:
-                    logger.error(f"微信 jscode2session 请求失败: HTTP {resp.status_code}")
-            except Exception as e:
-                logger.error(f"微信 jscode2session 异常: {e}")
-        else:
-            logger.info("小程序 AppID 未配置，使用开发模式（code hash 作为 openid）")
-            # 安全改进: 使用 SHA-256 替代 MD5
-            # 开发模式下生成确定性但安全的 openid
-            code_hash = hashlib.sha256(f"mini_dev_{code}".encode()).hexdigest()[:32]
-            return f"mini_{code_hash}"
-
-    def wechat_mini_login(
-        self,
-        code: str,
-        nickname: str = "微信用户",
-        avatar: str = ""
-    ) -> Tuple[Optional[str], Optional[User]]:
-        """
-        微信小程序登录
-
-        根据 openid 识别用户，返回：
-        - session token
-        - 用户基本信息
-        - API Key
-        
-        Args:
-            code: 小程序登录code
-            nickname: 用户昵称
-            avatar: 用户头像
-
-        Returns:
-            (session_token, user)
-        """
-        openid = self._get_mini_openid(code)
-        if not openid:
-            return None, None
-
-        user = self._find_user_by_openid(openid)
-        if not user:
-            user = self._find_user_by_union_id(openid)
-        
-        if not user:
-            user = self._create_user(
-                union_id=openid,
-                openid=openid,
-                nickname=nickname,
-                avatar=avatar,
-            )
-        else:
-            user.last_login_at = time.time()
-            if not user.openid:
-                user.openid = openid
-            if nickname and nickname != "微信用户":
-                user.nickname = nickname
-            if avatar:
-                user.avatar = avatar
-            self._save_data()
-
-        token = self._create_session(user.id)
-        logger.info(f"小程序用户 {nickname} 登录成功 (openid: {openid[:8]}...)")
-
-        return token, user
 
     def generate_website_credentials(self, user_id: str) -> Tuple[str, str]:
         """
@@ -959,9 +515,9 @@ class AuthManager:
             raise ValueError(f"User {user_id} not found")
 
         timestamp = int(time.time())
-        
-        account = f"wx_{user.nickname[:4]}_{timestamp}"
-        
+
+        account = f"exo_{user.nickname[:4]}_{timestamp}"
+
         password = secrets.token_urlsafe(12)
 
         return account, password
@@ -987,9 +543,9 @@ class AuthManager:
         user.website_account = account
         user.website_password_hash = self.hash_password(password)
         user.website_password = password
-        
+
         self._save_data()
-        
+
         logger.info(f"用户 {user.nickname} 的网站凭据已更新")
 
     def get_or_create_api_key(self, user_id: str) -> str:
@@ -1004,29 +560,29 @@ class AuthManager:
         """
         try:
             from api_key_manager import get_api_key_manager
-            
+
             key_mgr = get_api_key_manager()
-            
+
             existing_keys = key_mgr.get_user_keys(user_id)
-            
+
             if existing_keys:
                 return existing_keys[0].key
-            
+
             new_key = key_mgr.create_key(
                 name=f"用户默认 Key",
                 user_id=user_id,
                 permissions=["*"],
                 allowed_models=["*"]
             )
-            
+
             if new_key:
                 return new_key.key
-                
+
         except Exception as e:
             logger.warning(f"API Key 管理器不可用: {e}")
-        
+
         fallback_key = f"exo_sk_{secrets.token_urlsafe(32)}"
-        
+
         return fallback_key
 
     # ==================== 管理员登录 ====================
@@ -1206,7 +762,6 @@ class AuthManager:
                 if password == init_password:
                     logger.warning("⚠️ 使用首次初始化密码登录，请立即设置安全密码!")
                     created_user = self._create_user(
-                        union_id="admin",
                         nickname="管理员",
                         avatar="",
                         role="admin"
@@ -1237,7 +792,6 @@ class AuthManager:
 
         if not admin_user:
             admin_user = self._create_user(
-                union_id="admin",
                 nickname="管理员",
                 avatar="",
                 role="admin"
@@ -1306,7 +860,6 @@ class AuthManager:
 
         # 创建新用户
         user = self._create_user(
-            union_id=f"email_{email}",
             nickname=nickname,
             avatar="",
             role="user"
@@ -1424,34 +977,16 @@ class AuthManager:
 
     # ==================== 用户管理 ====================
 
-    def _find_user_by_union_id(self, union_id: str) -> Optional[User]:
-        """通过 union_id 查找用户"""
-        for user in self._users.values():
-            if user.union_id == union_id:
-                return user
-        return None
-
-    def _find_user_by_openid(self, openid: str) -> Optional[User]:
-        """通过 openid 查找用户"""
-        for user in self._users.values():
-            if user.openid == openid:
-                return user
-        return None
-
     def _create_user(
         self,
-        union_id: str,
         nickname: str,
         avatar: str = "",
         role: str = "user",
-        openid: str = ""
     ) -> User:
         """创建新用户"""
         import uuid
         user = User(
             id=str(uuid.uuid4()),
-            union_id=union_id,
-            openid=openid,
             nickname=nickname,
             avatar=avatar,
             role=role,

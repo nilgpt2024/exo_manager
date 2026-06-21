@@ -916,6 +916,25 @@ async def startup_event():
         # ✅ 启动心跳超时检测后台任务
         asyncio.create_task(_heartbeat_monitor_task())
         logger.info(f"💓 心跳监控任务已启动 (超时阈值: 90秒)")
+
+        # ✅ 启动自动分配触发器（全自动模式）
+        try:
+            global _auto_trigger
+            _auto_trigger = AutoAllocTrigger(manager)
+            await _auto_trigger.start()
+
+            # 连接稳定性管理器（增强防抖能力）
+            try:
+                resilient_alloc = get_resilient_allocator()
+                if resilient_alloc and hasattr(resilient_alloc, 'stability_mgr'):
+                    _auto_trigger.set_stability_manager(resilient_alloc.stability_mgr)
+                    logger.info(f"🤖 自动分配触发器已连接稳定性管理器 (防抖增强)")
+            except Exception as stability_err:
+                logger.warning(f"⚠️ 稳定性管理器连接失败（使用基础防抖）: {stability_err}")
+
+            logger.info(f"🤖 自动分配触发器已启动 (将在30s后初始化首次分配)")
+        except Exception as e:
+            logger.error(f"⚠️ 自动分配触发器启动失败: {e}")
     
     # 初始化 API Key 管理器，如果没有 key 则生成一个默认的
     key_manager = get_api_key_manager()
@@ -971,7 +990,15 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时清理"""
-    global manager, topo_manager
+    global manager, topo_manager, _auto_trigger
+
+    # 停止自动分配触发器
+    if _auto_trigger:
+        try:
+            await _auto_trigger.stop()
+            logger.info("🤖 自动分配触发器已停止")
+        except Exception as e:
+            logger.warning(f"⚠️ 触发器停止异常: {e}")
     
     if topo_manager:
         await topo_manager.stop()
