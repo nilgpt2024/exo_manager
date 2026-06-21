@@ -100,12 +100,18 @@ def download_file(url: str, dest: Path) -> bool:
             if total_size == 0:
                 f.write(response.content)
             else:
-                from tqdm import tqdm
-                with tqdm(total=total_size, unit="iB", unit_scale=True) as pbar:
+                try:
+                    from tqdm import tqdm
+                    with tqdm(total=total_size, unit="iB", unit_scale=True) as pbar:
+                        for chunk in response.iter_content(chunk_size=block_size):
+                            if chunk:
+                                size = f.write(chunk)
+                                pbar.update(size)
+                except ImportError:
+                    # 无 tqdm 时直接下载（无进度条）
                     for chunk in response.iter_content(chunk_size=block_size):
                         if chunk:
-                            size = f.write(chunk)
-                            pbar.update(size)
+                            f.write(chunk)
 
         print(f"下载完成: {dest}")
         return True
