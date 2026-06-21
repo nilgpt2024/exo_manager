@@ -2057,7 +2057,7 @@ function switchPage(page) {
 // ==================== 额度 ====================
 async function loadQuota() {
     try {
-        const res = await fetch('/v1/user/quota');
+        const res = await fetch('/v1/user/quota', { credentials: 'include' });
         const data = await res.json();
         if (data.success) {
             const q = data.data;
@@ -2246,11 +2246,7 @@ async function sendMessage() {
 // ==================== API Key ====================
 async function loadApiKeys() {
     try {
-        const res = await fetch('/v1/user/keys');
-        const data = await res.json();
-        const listEl = document.getElementById('apiKeyList');
-
-        if (!data.data?.length) return;
+        const res = await fetch('/v1/user/keys', { credentials: 'include' });
 
         let html = '';
         data.data.forEach(k => {
@@ -2282,6 +2278,7 @@ async function createApiKey() {
         const res = await fetch('/v1/user/keys', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ name, description: '' }),
         });
         const data = await res.json();
@@ -2655,7 +2652,7 @@ function escapeHtml(s) {
 
 async function loadConnectionInfo() {
     try {
-        const res = await fetch('/api/frps/user-connection');
+        const res = await fetch('/api/frps/user-connection', { credentials: 'include' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         connectData = await res.json();
 
@@ -3073,6 +3070,7 @@ async function handleChangePassword(event) {
         const res = await fetch('/v1/user/password', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({
                 old_password: oldPassword,
                 new_password: newPassword

@@ -654,6 +654,7 @@
                 const res = await fetch(`${API_BASE}/login/email`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({ email, password })
                 });
                 const data = await res.json();
@@ -703,6 +704,7 @@
             try {
                 const res = await fetch(`${API_BASE}/register/email`, {
                     method: 'POST',
+                    credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email, password, nickname })
                 });
