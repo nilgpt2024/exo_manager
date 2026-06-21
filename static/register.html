@@ -682,11 +682,11 @@
         btn.innerHTML = '<span class="loading-spinner"></span><span>正在创建...</span>';
 
         try {
-            const res = await fetch('/api/auth/register', {
+            const res = await fetch('/register/email', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ username, email, password })
+                body: JSON.stringify({ nickname: username, email, password })
             });
 
             const data = await res.json();

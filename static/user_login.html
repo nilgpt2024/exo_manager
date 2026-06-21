@@ -162,52 +162,11 @@
             position: relative;
         }
 
-        /* 模式切换 */
-        .mode-switcher {
-            display: flex;
-            padding: 5px;
-            margin: 0 2rem 1.5rem;
-            background: rgba(255,255,255,0.04);
-            border-radius: 14px;
-            border: 1px solid rgba(255,255,255,0.06);
-        }
-
-        .mode-btn {
-            flex: 1;
-            padding: 0.7rem;
-            border: none;
-            background: transparent;
-            border-radius: 11px;
-            font-family: inherit;
-            font-size: 0.88rem;
-            font-weight: 500;
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center; justify-content: center;
-            gap: 0.45rem;
-        }
-
-        .mode-btn:hover { color: var(--text-secondary); }
-
-        .mode-btn.active {
-            background: rgba(0, 245, 212, 0.12);
-            color: var(--accent-cyan);
-            font-weight: 600;
-            box-shadow: 0 0 16px rgba(0, 245, 212, 0.08);
-        }
-
-        .mode-btn i { font-size: 0.85rem; }
-
         /* 表单区域 */
         .form-panel {
-            display: none;
             padding: 0 2.4rem 2.4rem;
             animation: panelIn 0.35s ease;
         }
-
-        .form-panel.active { display: block; }
 
         @keyframes panelIn {
             from { opacity: 0; transform: translateX(15px); }
@@ -438,8 +397,6 @@
             .login-card { border-radius: 0; width: 100%; min-height: 100vh; }
             .card-header { padding: 2.2rem 1.5rem 1.4rem; }
             .card-header h1 { font-size: 1.6rem; }
-            .mode-switcher { margin: 0 1.4rem 1.2rem; }
-            .mode-btn { padding: 0.65rem 0; font-size: 0.88rem; }
             .form-panel { padding: 0 1.4rem 1.8rem; }
             .features-grid { grid-template-columns: 1fr; }
             .form-label { font-size: 0.88rem; }
@@ -452,7 +409,6 @@
         @media (max-width: 375px) {
             .card-header { padding: 1.8rem 1.2rem 1.2rem; }
             .card-header h1 { font-size: 1.4rem; }
-            .mode-switcher { margin: 0 1.2rem 1rem; }
             .form-panel { padding: 0 1.2rem 1.5rem; }
         }
     </style>
@@ -474,18 +430,8 @@
                 <p>分布式推理集群 · 安全接入</p>
             </div>
 
-            <!-- 模式切换：登录 / 注册 -->
-            <div class="mode-switcher">
-                <button class="mode-btn active" id="btnLoginMode" onclick="switchMode('login')">
-                    <i class="fas fa-sign-in-alt"></i> 账号登录
-                </button>
-                <button class="mode-btn" id="btnRegisterMode" onclick="switchMode('register')">
-                    <i class="fas fa-user-plus"></i> 注册账号
-                </button>
-            </div>
-
             <!-- 登录表单 -->
-            <div class="form-panel active" id="panelLogin">
+            <div class="form-panel" id="panelLogin">
                 <form id="loginForm" onsubmit="handleEmailLogin(event)">
                     <div class="form-group">
                         <label>邮箱地址</label>
@@ -514,65 +460,10 @@
                 </form>
 
                 <div class="form-footer">
-                    还没有账号？<a onclick="switchMode('register')">立即注册</a>
+                    还没有账号？<a href="/register">立即注册</a>
                 </div>
             </div>
 
-            <!-- 注册表单 -->
-            <div class="form-panel" id="panelRegister">
-                <form id="registerForm" onsubmit="handleEmailRegister(event)">
-                    <div class="form-group">
-                        <label>邮箱地址</label>
-                        <div class="input-wrap">
-                            <i class="fas fa-envelope"></i>
-                            <input type="email" id="registerEmail" class="form-input"
-                                   placeholder="请输入邮箱地址" required autocomplete="email">
-                        </div>
-                        <div class="error-text" id="registerEmailError"></div>
-                    </div>
-
-                    <div class="form-group">
-                        <label>昵称（可选）</label>
-                        <div class="input-wrap">
-                            <i class="fas fa-user"></i>
-                            <input type="text" id="registerNickname" class="form-input"
-                                   placeholder="设置您的昵称" autocomplete="nickname">
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label>密码</label>
-                        <div class="input-wrap">
-                            <i class="fas fa-lock"></i>
-                            <input type="password" id="registerPassword" class="form-input"
-                                   placeholder="至少 6 位密码" required minlength="6" autocomplete="new-password">
-                        </div>
-                        <div class="error-text" id="registerPasswordError"></div>
-                    </div>
-
-                    <div class="form-group">
-                        <label>确认密码</label>
-                        <div class="input-wrap">
-                            <i class="fas fa-lock"></i>
-                            <input type="password" id="registerConfirmPassword" class="form-input"
-                                   placeholder="再次输入密码" required minlength="6" autocomplete="new-password">
-                        </div>
-                        <div class="error-text" id="registerConfirmPasswordError"></div>
-                    </div>
-
-                    <button type="submit" class="submit-btn" id="registerBtn">
-                        <span class="btn-text">注 册</span>
-                        <span class="spinner"><i class="fas fa-spinner fa-spin"></i></span>
-                    </button>
-                </form>
-
-                <div class="form-footer">
-                    已有账号？<a onclick="switchMode('login')">返回登录</a>
-                </div>
-            </div>
-
-         
- 
         </div>
     </div>
 
@@ -587,20 +478,6 @@
             t.textContent = msg;
             t.className = `toast show ${type}`;
             setTimeout(() => t.classList.remove('show'), 3200);
-        }
-
-        // ==================== 模式切换 ====================
-        function switchMode(mode) {
-            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.form-panel').forEach(p => p.classList.remove('active'));
-
-            if (mode === 'login') {
-                document.getElementById('btnLoginMode').classList.add('active');
-                document.getElementById('panelLogin').classList.add('active');
-            } else {
-                document.getElementById('btnRegisterMode').classList.add('active');
-                document.getElementById('panelRegister').classList.add('active');
-            }
         }
 
         // ==================== 表单验证 ====================
@@ -667,57 +544,6 @@
                     showToast(detail, 'error');
                     if (detail.includes('邮箱')) showError('loginEmail', 'loginEmailError', detail);
                     else showError('loginPassword', 'loginPasswordError', detail);
-                }
-            } catch (err) {
-                showToast('网络错误，请重试', 'error');
-            } finally {
-                btn.classList.remove('loading');
-                btn.disabled = false;
-            }
-        }
-
-        // ==================== 邮箱注册 ====================
-        async function handleEmailRegister(e) {
-            e.preventDefault();
-
-            const email = document.getElementById('registerEmail').value.trim();
-            const nickname = document.getElementById('registerNickname').value.trim();
-            const password = document.getElementById('registerPassword').value;
-            const confirmPwd = document.getElementById('registerConfirmPassword').value;
-            const btn = document.getElementById('registerBtn');
-
-            clearError('registerEmail', 'registerEmailError');
-            clearError('registerPassword', 'registerPasswordError');
-            clearError('registerConfirmPassword', 'registerConfirmPasswordError');
-
-            let hasErr = false;
-            if (!email) { showError('registerEmail', 'registerEmailError', '请输入邮箱地址'); hasErr = true; }
-            else if (!validateEmail(email)) { showError('registerEmail', 'registerEmailError', '邮箱格式不正确'); hasErr = true; }
-            if (!password) { showError('registerPassword', 'registerPasswordError', '请输入密码'); hasErr = true; }
-            else if (password.length < 6) { showError('registerPassword', 'registerPasswordError', '密码长度至少6位'); hasErr = true; }
-            if (password !== confirmPwd) { showError('registerConfirmPassword', 'registerConfirmPasswordError', '两次输入的密码不一致'); hasErr = true; }
-            if (hasErr) return;
-
-            btn.classList.add('loading');
-            btn.disabled = true;
-
-            try {
-                const res = await fetch(`${API_BASE}/register/email`, {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email, password, nickname })
-                });
-                const data = await res.json();
-
-                if (data.success) {
-                    showToast('注册成功！请登录', 'success');
-                    setTimeout(() => switchMode('login'), 1400);
-                } else {
-                    const detail = data.detail || '注册失败';
-                    showToast(detail, 'error');
-                    if (detail.includes('邮箱')) showError('registerEmail', 'registerEmailError', detail);
-                    else if (detail.includes('密码')) showError('registerPassword', 'registerPasswordError', detail);
                 }
             } catch (err) {
                 showToast('网络错误，请重试', 'error');

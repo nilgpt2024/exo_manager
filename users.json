@@ -25,6 +25,19 @@
       "website_password": "",
       "website_password_hash": "0a09d0d420f399bc855278fe566bf6fce9e5752f47762b16cf213aceed01783e",
       "password_changed_at": 0.0
+    },
+    {
+      "id": "fd7f002c-862c-4077-ae16-e28aed9f727d",
+      "nickname": "fee",
+      "avatar": "",
+      "role": "user",
+      "is_disabled": false,
+      "created_at": 1782051009.5061462,
+      "last_login_at": 1782051023.232771,
+      "website_account": "fe@163.com",
+      "website_password": "",
+      "website_password_hash": "$2b$12$I7Os6Ze3sF5fChOwn5UuSe1SG86ewGuxzw3jWJ8GkDJlNp/InNXba",
+      "password_changed_at": 1782051010.0538912
     }
   ],
   "sessions": {
@@ -92,6 +105,11 @@
       "user_id": "38f5c62c-ed1b-4d89-a22b-c0099bc0d594",
       "created_at": 1782049003.2940729,
       "expires_at": 1782653803.2940729
+    },
+    "81UeaoXj5jh1-N3GYF7IwTrpzv2tSbGXtOvX--IQxm4": {
+      "user_id": "fd7f002c-862c-4077-ae16-e28aed9f727d",
+      "created_at": 1782051023.2352865,
+      "expires_at": 1782655823.2352865
     }
   }
 }
