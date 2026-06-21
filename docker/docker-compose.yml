@@ -24,7 +24,7 @@ services:
     # 环境变量配置 (可通过 .env 文件覆盖)
     environment:
       # 运行环境
-      - EXO_ENV=${EXO_ENV:-production}
+      - EXO_ENV=${EXO_ENV:-development}
       - EXO_PORT=8080
 
       # 安全配置
