@@ -454,6 +454,27 @@
             .form-panel { padding: 2rem; }
             .brand-title { font-size: 1.6rem; }
         }
+
+        /* 手机端适配 */
+        @media (max-width: 480px) {
+            body { padding: 0; align-items: flex-start; }
+            .register-wrapper {
+                max-width: 100%;
+                border-radius: 0;
+                min-height: 100vh;
+            }
+            .brand-panel { display: none; }
+            .form-panel { padding: 1.5rem 1.25rem; }
+            .form-header h2 { font-size: 1.5rem; }
+            .form-header p { font-size: 0.85rem; }
+            .form-label { font-size: 0.88rem; }
+            .form-input { font-size: 16px; padding: 0.8rem 1rem 0.8rem 2.75rem; } /* 防止 iOS 自动缩放 */
+            .toggle-password { right: 10px; width: 36px; height: 36px; }
+            .btn-register { padding: 0.9rem; font-size: 1rem; }
+            .agreement label { font-size: 0.82rem; line-height: 1.5; }
+            .agreement a { display: inline-block; margin: 0 2px; }
+            .form-footer { text-align: center; }
+        }
     </style>
 </head>
 <body>
@@ -571,7 +592,7 @@
             <div class="agreement">
                 <input type="checkbox" id="agreeTerms" required>
                 <label for="agreeTerms">
-                    我已阅读并同意 <a href="#">服务条款</a> 和 <a href="#">隐私政策</a>
+                    我已阅读并同意 <a href="/terms" target="_blank">服务条款</a> 和 <a href="/privacy" target="_blank">隐私政策</a>
                 </label>
             </div>
 

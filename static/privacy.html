@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EXO - 隐私政策</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.7);
+            --accent-cyan: #00f5d4;
+            --accent-blue: #00bbf9;
+            --accent-purple: #9b5de5;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border-glow: rgba(0, 245, 212, 0.2);
+            --gradient-main: linear-gradient(135deg, #00f5d4 0%, #00bbf9 50%, #9b5de5 100%);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Noto Sans SC', sans-serif;
+            background: var(--bg-primary);
+            min-height: 100vh;
+            color: var(--text-primary);
+            line-height: 1.8;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        .grid-bg {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 245, 212, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 245, 212, 0.03) 1px, transparent 1px);
+            background-size: 60px 60px;
+            animation: gridMove 20s linear infinite;
+            z-index: 0;
+        }
+
+        @keyframes gridMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(60px, 60px); }
+        }
+
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.25;
+            z-index: 0;
+            pointer-events: none;
+        }
+        .orb-1 {
+            width: 500px; height: 500px;
+            background: radial-gradient(circle, var(--accent-cyan), transparent);
+            top: -150px; right: -100px;
+            animation: float 12s ease-in-out infinite;
+        }
+        .orb-2 {
+            width: 400px; height: 400px;
+            background: radial-gradient(circle, var(--accent-purple), transparent);
+            bottom: -100px; left: -100px;
+            animation: float 15s ease-in-out infinite reverse;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(25px, -20px) scale(1.05); }
+            66% { transform: translate(-20px, 15px) scale(0.95); }
+        }
+
+        /* 导航栏 */
+        .navbar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 100;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(20px);
+            background: rgba(10, 14, 23, 0.8);
+            border-bottom: 1px solid var(--border-glow);
+        }
+
+        .logo {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: var(--gradient-main);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.3s;
+        }
+
+        .nav-links a:hover {
+            color: var(--accent-cyan);
+        }
+
+        /* 主内容 */
+        .container {
+            position: relative;
+            z-index: 1;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 6rem 2rem 4rem;
+        }
+
+        .page-header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .page-header h1 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: var(--gradient-main);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+
+        .page-header p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .update-date {
+            display: inline-block;
+            margin-top: 0.75rem;
+            padding: 0.35rem 1rem;
+            background: rgba(155, 93, 229, 0.15);
+            border: 1px solid rgba(155, 93, 229, 0.3);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: var(--accent-purple);
+        }
+
+        /* 内容卡片 */
+        .content-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-glow);
+            border-radius: 16px;
+            padding: 2.5rem;
+            backdrop-filter: blur(10px);
+            margin-bottom: 1.5rem;
+        }
+
+        .content-card h2 {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.25rem;
+            color: var(--accent-purple);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .content-card h2 i {
+            font-size: 1rem;
+        }
+
+        .content-card h3 {
+            font-size: 1.05rem;
+            color: var(--accent-blue);
+            margin: 1.5rem 0 0.75rem;
+        }
+
+        .content-card p {
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            font-size: 0.95rem;
+        }
+
+        .content-card ul {
+            list-style: none;
+            padding-left: 0;
+            margin-bottom: 1rem;
+        }
+
+        .content-card ul li {
+            color: var(--text-secondary);
+            padding: 0.5rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+            font-size: 0.95rem;
+        }
+
+        .content-card ul li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 6px;
+            height: 6px;
+            background: var(--accent-purple);
+            border-radius: 50%;
+        }
+
+        /* 数据表格 */
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+
+        .data-table th,
+        .data-table td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+        }
+
+        .data-table th {
+            background: rgba(155, 93, 229, 0.1);
+            color: var(--accent-purple);
+            font-weight: 600;
+        }
+
+        .data-table td {
+            color: var(--text-secondary);
+        }
+
+        .data-table tr:hover td {
+            background: rgba(155, 93, 229, 0.05);
+        }
+
+        /* 高亮文本 */
+        .highlight {
+            color: var(--accent-purple);
+            font-weight: 500;
+        }
+
+        .safe {
+            color: var(--accent-cyan);
+            font-weight: 500;
+        }
+
+        .warning {
+            color: #f59e0b;
+            font-weight: 500;
+        }
+
+        /* 隐私徽章 */
+        .privacy-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.35rem 0.85rem;
+            background: rgba(0, 245, 212, 0.1);
+            border: 1px solid rgba(0, 245, 212, 0.25);
+            border-radius: 20px;
+            font-size: 0.82rem;
+            color: var(--accent-cyan);
+            margin-right: 0.5rem;
+        }
+
+        /* 底部导航 */
+        .footer-nav {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 3rem;
+            flex-wrap: wrap;
+        }
+
+        .footer-nav a {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-glow);
+            border-radius: 10px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: all 0.3s;
+        }
+
+        .footer-nav a:hover {
+            border-color: var(--accent-purple);
+            color: var(--accent-purple);
+            transform: translateY(-2px);
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .container {
+                padding: 5rem 1rem 2rem;
+            }
+
+            .page-header h1 {
+                font-size: 1.75rem;
+            }
+
+            .content-card {
+                padding: 1.5rem;
+            }
+
+            .navbar {
+                padding: 0.75rem 1rem;
+            }
+
+            .logo {
+                font-size: 1.2rem;
+            }
+
+            .data-table {
+                font-size: 0.8rem;
+            }
+
+            .data-table th,
+            .data-table td {
+                padding: 0.5rem 0.5rem;
+            }
+        }
+
+        /* 手机端适配 */
+        @media (max-width: 480px) {
+            .page-header h1 { font-size: 1.4rem; }
+            .content-card { padding: 1.25rem; border-radius: 12px; }
+            .content-card h2 { font-size: 1.05rem; gap: 0.5rem; }
+            .content-card h3 { font-size: 0.95rem; }
+            .content-card p, .content-card ul li { font-size: 0.88rem; }
+            .content-card ul li { padding-left: 1.2rem; }
+            .privacy-badge { font-size: 0.72rem; padding: 0.25rem 0.6rem; margin-bottom: 0.35rem; }
+            .footer-nav a { padding: 0.6rem 1rem; font-size: 0.82rem; }
+            .nav-links { display: none; }
+            .update-date { font-size: 0.78rem; padding: 0.25rem 0.75rem; }
+
+            /* 表格横向滚动 */
+            .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -0.5rem; }
+            .data-table { min-width: 400px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- 背景效果 -->
+    <div class="grid-bg"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <a href="/" class="logo">EXO</a>
+        <div class="nav-links">
+            <a href="/">首页</a>
+            <a href="/register">注册</a>
+            <a href="/login">登录</a>
+            <a href="/terms">服务条款</a>
+        </div>
+    </nav>
+
+    <!-- 主内容 -->
+    <div class="container">
+        <div class="page-header">
+            <h1><i class="fas fa-user-secret"></i> 隐私政策</h1>
+            <p>Privacy Policy</p>
+            <span class="update-date"><i class="far fa-clock"></i> 最后更新：2024年1月1日</span>
+            <br><br>
+            <span class="privacy-badge"><i class="fas fa-shield-alt"></i> 数据加密存储</span>
+            <span class="privacy-badge"><i class="fas fa-lock"></i> 不向第三方出售</span>
+            <span class="privacy-badge"><i class="fas fa-user-check"></i> 用户可自主删除</span>
+        </div>
+
+        <!-- 引言 -->
+        <div class="content-card">
+            <h2><i class="fas fa-heart"></i> 我们重视您的隐私</h2>
+            <p><span class="highlight">EXO 分布式推理平台</span>（以下简称"我们"或"本平台"）深知个人信息对您的重要性，我们将按照法律法规要求，采取相应安全保护措施，尽力保护您的个人信息安全可控。</p>
+            <p>本隐私政策旨在向您说明我们如何收集、使用、存储、共享和保护您的个人信息。请您仔细阅读，如有疑问可通过文末联系方式与我们联系。</p>
+        </div>
+
+        <!-- 信息收集 -->
+        <div class="content-card">
+            <h2><i class="fas fa-database"></i> 我们收集的信息</h2>
+
+            <h3>1.1 您主动提供的信息</h3>
+            <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>信息类型</th>
+                        <th>用途</th>
+                        <th>是否必须</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>用户名 / 昵称</td>
+                        <td>账户标识与个性化展示</td>
+                        <td><span class="warning">必须</span></td>
+                    </tr>
+                    <tr>
+                        <td>电子邮箱</td>
+                        <td>账户验证、通知、找回密码</td>
+                        <td><span class="warning">必须</span></td>
+                    </tr>
+                    <tr>
+                        <td>密码（哈希值）</td>
+                        <td>身份验证（仅存储加密哈希）</td>
+                        <td><span class="warning">必须</span></td>
+                    </tr>
+                    <tr>
+                        <td>API Key</td>
+                        <td>程序化接口访问认证</td>
+                        <td>可选</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+
+            <h3>1.2 自动收集的信息</h3>
+            <ul>
+                <li><span class="highlight">日志数据</span> - 访问时间、请求路径、响应状态码等服务器日志</li>
+                <li><span class="highlight">设备信息</span> - IP 地址、浏览器类型、操作系统（用于安全审计）</li>
+                <li><span class="highlight">使用统计</span> - API 调用次数、模型使用情况（用于服务优化）</li>
+            </ul>
+
+            <p class="safe"><i class="fas fa-check-circle"></i> 我们<span class="safe">不会</span>收集您的聊天记录、对话内容或推理输入的明文数据。</p>
+        </div>
+
+        <!-- 信息使用 -->
+        <div class="content-card">
+            <h2><i class="fas fa-cogs"></i> 信息如何使用</h2>
+            <p>我们收集的信息将用于以下目的：</p>
+            <ul>
+                <li><i class="fas fa-user-check"></i> <span class="highlight">提供、维护和保护服务</span> - 账户管理、身份认证、安全防护</li>
+                <li><i class="fas fa-chart-line"></i> <span class="highlight">改进和优化服务</span> - 分析使用模式，提升用户体验和服务质量</li>
+                <li><i class="fas fa-bell"></i> <span class="highlight">发送通知</span> - 服务变更、安全警报、重要公告</li>
+                <li><i class="fas fa-shield-virus"></i> <span class="highlight">安全保障</span> - 检测和防范欺诈、滥用行为和安全威胁</li>
+                <li><i class="fas fa-balance-scale"></i> <span class="highlight">法律合规</span> - 满足法律法规要求</li>
+            </ul>
+        </div>
+
+        <!-- Cookie 使用 -->
+        <div class="content-card">
+            <h2><i class="fas fa-cookie-bite"></i> Cookie 与同类技术</h2>
+            <p>为提升用户体验，我们可能使用以下技术：</p>
+            <ul>
+                <li><span class="highlight">Session Cookie</span> - 用于维持登录状态，会话结束后自动删除</li>
+                <li><span class="highlight">偏好设置</span> - 记录您的界面偏好（如主题设置），便于下次访问</li>
+            </ul>
+            <p class="safe"><i class="fas fa-info-circle"></i> 我们<span class="safe">不使用</span>第三方追踪 Cookie 进行广告定向。</p>
+        </div>
+
+        <!-- 信息存储与保护 -->
+        <div class="content-card">
+            <h2><i class="fas fa-lock"></i> 信息存储与安全</h2>
+
+            <h3>4.1 存储位置</h3>
+            <p>您的数据存储在我们控制的服务器中。我们采用行业标准的<span class="safe">加密技术</span>保护数据安全。</p>
+
+            <h3>4.2 安全措施</h3>
+            <ul>
+                <li><span class="highlight">传输加密</span> - 所有数据传输采用 HTTPS/TLS 加密</li>
+                <li><span class="highlight">存储加密</span> - 密码使用 bcrypt/argon2 等强哈希算法单向加密存储</li>
+                <li><span class="highlight">访问控制</span> - 基于角色的权限管理系统，最小权限原则</li>
+                <li><span class="highlight">安全审计</span> - 定期进行安全评估和渗透测试</li>
+                <li><span class="highlight">入侵检测</span> - 实时监控异常访问和行为分析</li>
+            </ul>
+
+            <h3>4.3 数据保留</h3>
+            <p>我们仅在实现本政策所述目的所需的期限内保留您的个人信息：</p>
+            <ul>
+                <li>账户信息：在账户存续期间及注销后30天内（用于争议处理）</li>
+                <li>日志数据：最长保留90天</li>
+                <li>逾期后将自动匿名化处理或安全删除</li>
+            </ul>
+        </div>
+
+        <!-- 信息共享 -->
+        <div class="content-card">
+            <h2><i class="fas fa-share-alt"></i> 信息共享</h2>
+            <p class="safe"><i class="fas fa-shield-alt"></i> 我们承诺：<span class="safe">不会出售、出租或以其他方式向第三方披露您的个人信息</span>，除非以下情形：</p>
+            <ul>
+                <li><span class="highlight">获得您的明确同意</span></li>
+                <li><span class="highlight">法律法规要求</span> - 根据法院命令、监管要求或其他法律义务</li>
+                <li><span class="highlight">保护合法权益</span> - 为防止欺诈、保障用户或公众的安全</li>
+                <li><span class="highlight">业务转让</span> - 如发生合并、收购或资产转让（将提前通知您）</li>
+            </ul>
+        </div>
+
+        <!-- 用户权利 -->
+        <div class="content-card">
+            <h2><i class="fas fa-user-edit"></i> 您的权利</h2>
+            <p>根据相关法律法规，您享有以下权利：</p>
+            <ul>
+                <li><i class="fas fa-eye"></i> <span class="highlight">知情权</span> - 了解我们收集了哪些关于您的信息</li>
+                <li><i class="fas fa-download"></i> <span class="highlight">获取权</span> - 获取我们持有的您的个人信息副本</li>
+                <li><i class="fas fa-edit"></i> <span class="highlight">更正权</span> - 更正不准确或不完整的个人信息</li>
+                <li><i class="fas fa-trash-alt"></i> <span class="highlight">删除权</span> - 要求删除您的个人信息（注销账户）</li>
+                <li><i class="fas fa-ban"></i> <span class="highlight">撤回同意</span> - 撤回此前给予的任何同意</li>
+            </ul>
+            <p>如需行使上述权利，请通过文末提供的联系方式与我们联系。我们将在合理期限内（通常不超过15个工作日）回应您的请求。</p>
+        </div>
+
+        <!-- 第三方服务 -->
+        <div class="content-card">
+            <h2><i class="fas fa-puzzle-piece"></i> 第三方服务</h2>
+            <p>我们的平台可能包含以下第三方组件：</p>
+            <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>服务类型</th>
+                        <th>提供商</th>
+                        <th>用途</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>前端字体</td>
+                        <td>Google Fonts</td>
+                        <td>网页字体渲染</td>
+                    </tr>
+                    <tr>
+                        <td>图标库</td>
+                        <td>Font Awesome (CDNJS)</td>
+                        <td>UI 图标展示</td>
+                    </tr>
+                </tbody>
+            </table>
+            </div>
+            <p>这些第三方服务可能会收集有限的非个人信息（如浏览器类型）。建议您查阅其各自的隐私政策。</p>
+        </div>
+
+        <!-- 未成年人保护 -->
+        <div class="content-card">
+            <h2><i class="fas fa-child"></i> 未成年人保护</h2>
+            <p>我们的平台主要面向成年用户。如果您是未满18周岁的未成年人，请在监护人的陪同下阅读本政策，并在获得监护人同意后使用我们的服务。</p>
+            <p>如发现我们在未事先获得可证实的父母同意的情况下收集了未成年人的个人信息，请联系我们，我们将尽快删除相关数据。</p>
+        </div>
+
+        <!-- 政策变更 -->
+        <div class="content-card">
+            <h2><i class="fas fa-sync-alt"></i> 政策变更</h2>
+            <p>我们可能会不时更新本隐私政策。重大变更将通过以下方式通知您：</p>
+            <ul>
+                <li>在本页面发布更新日期和新版本</li>
+                <li>通过平台内通知或邮件提醒</li>
+                <li>注册时的邮箱通知（如适用）</li>
+            </ul>
+            <p>建议您定期查阅本页面以了解最新版本。</p>
+        </div>
+
+        <!-- 联系方式 -->
+        <div class="content-card">
+            <h2><i class="fas fa-envelope"></i> 联系我们</h2>
+            <p>如您对本隐私政策有任何疑问、意见或请求，请通过以下方式联系我们：</p>
+            <ul>
+                <li><i class="fas fa-envelope"></i> 邮箱：privacy@exo-platform.com</li>
+                <li><i class="fab fa-github"></i> GitHub Issues：提交隐私相关问题</li>
+            </ul>
+            <p>我们将在收到您的请求后及时回复，通常不超过15个工作日。</p>
+        </div>
+
+        <!-- 底部导航 -->
+        <div class="footer-nav">
+            <a href="/register"><i class="fas fa-arrow-left"></i> 返回注册</a>
+            <a href="/terms"><i class="fas fa-file-contract"></i> 服务条款</a>
+            <a href="/"><i class="fas fa-home"></i> 返回首页</a>
+        </div>
+    </div>
+</body>
+</html>

@@ -6231,6 +6231,24 @@ async def serve_register_html(request: Request):
     return await serve_register(request)
 
 
+@app.get("/terms", response_class=HTMLResponse)
+async def serve_terms_page(request: Request):
+    """服务条款页"""
+    terms_html = Path(__file__).parent / "static" / "terms.html"
+    if terms_html.exists():
+        return HTMLResponse(content=terms_html.read_text(encoding='utf-8'))
+    return HTMLResponse(content="<h1>Page not found</h1>", status_code=404)
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def serve_privacy_page(request: Request):
+    """隐私政策页"""
+    privacy_html = Path(__file__).parent / "static" / "privacy.html"
+    if privacy_html.exists():
+        return HTMLResponse(content=privacy_html.read_text(encoding='utf-8'))
+    return HTMLResponse(content="<h1>Page not found</h1>", status_code=404)
+
+
 def get_fallback_html() -> str:
     """当静态文件不存在时的回退HTML"""
     return '''

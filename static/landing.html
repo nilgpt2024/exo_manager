@@ -799,6 +799,50 @@
             }
         }
 
+        /* 手机端适配 */
+        @media (max-width: 480px) {
+            .navbar { padding: 0.6rem 1rem; }
+            .logo-icon { width: 28px; height: 28px; font-size: 1rem; }
+            .logo-text { font-size: 1.1rem; }
+
+            .hero { padding: 5rem 1rem 2rem; }
+            .hero-title { font-size: 1.75rem !important; line-height: 1.3; }
+            .hero-subtitle { font-size: 0.9rem !important; }
+            .hero-desc { font-size: 0.85rem; max-width: 100%; }
+            .hero-actions { flex-direction: column; width: 100%; }
+            .hero-btn { width: 100%; justify-content: center; padding: 0.85rem 1.5rem; font-size: 0.95rem; }
+
+            .stat-card { padding: 0.85rem 1rem; min-width: auto; flex: 1; }
+            .stat-value { font-size: 1.3rem; }
+            .stat-label { font-size: 0.72rem; }
+
+            .section { padding: 3rem 1rem !important; }
+            .section-title { font-size: 1.4rem !important; }
+            .section-desc { font-size: 0.85rem; }
+
+            .feature-card { padding: 1.25rem; border-radius: 14px; }
+            .feature-icon { width: 44px; height: 44px; font-size: 1.2rem; }
+            .feature-title { font-size: 0.95rem; }
+            .feature-desc { font-size: 0.82rem; }
+
+            .arch-step { padding: 1rem; }
+            .arch-step-num { width: 32px; height: 32px; font-size: 0.85rem; }
+            .arch-step h4 { font-size: 0.9rem; }
+            .arch-step p { font-size: 0.8rem; }
+
+            .cta-box { padding: 2rem 1.25rem; border-radius: 16px; }
+            .cta-title { font-size: 1.35rem; }
+            .cta-desc { font-size: 0.85rem; }
+
+            /* 网络可视化 */
+            .network-viz { max-width: 280px; height: 200px; }
+
+            /* Footer */
+            .footer { padding: 2rem 1rem !important; }
+            .footer-grid { grid-template-columns: 1fr; gap: 1.5rem; text-align: center; }
+            .footer-bottom { flex-direction: column; gap: 0.5rem; text-align: center; }
+        }
+
         /* 滚动显示动画 */
         .reveal {
             opacity: 0;

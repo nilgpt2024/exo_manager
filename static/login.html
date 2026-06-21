@@ -468,6 +468,25 @@
                 font-size: 1.75rem;
             }
         }
+
+        /* 手机端适配 */
+        @media (max-width: 480px) {
+            body { padding: 0; align-items: flex-start; }
+            .login-wrapper {
+                max-width: 100%;
+                border-radius: 0;
+                min-height: 100vh;
+            }
+            .login-info { display: none; }
+            .login-form { padding: 1.5rem 1.25rem; }
+            .form-header h2 { font-size: 1.4rem; }
+            .form-header p { font-size: 0.85rem; }
+            .form-label { font-size: 0.88rem; }
+            .form-input { font-size: 16px; padding: 0.8rem 1rem 0.8rem 2.75rem; }
+            .toggle-password { right: 10px; width: 36px; height: 36px; }
+            .btn { padding: 0.85rem; font-size: 1rem; }
+            .form-options { flex-direction: column; gap: 0.5rem; align-items: flex-start; }
+        }
     </style>
 </head>
 <body>

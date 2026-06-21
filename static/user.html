@@ -983,6 +983,63 @@
             .msg-bubble { max-width: 85%; }
         }
 
+        /* 手机端适配 */
+        @media (max-width: 480px) {
+            body { font-size: 14px; }
+
+            /* 移动端顶部栏 */
+            .mobile-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 0.6rem 1rem;
+                background: var(--user-surface);
+                border-bottom: 1px solid var(--user-border);
+                position: fixed;
+                top: 0; left: 0; right: 0;
+                z-index: 100;
+            }
+            .mobile-header-title {
+                font-weight: 700; font-size: 1rem; color: var(--user-text);
+            }
+            .mobile-menu-btn {
+                width: 36px; height: 36px;
+                border: none; background: #f0fdfa;
+                border-radius: 8px; color: var(--user-primary);
+                font-size: 1.1rem; cursor: pointer;
+            }
+
+            .main-content { padding-top: 52px; } /* 为移动端顶栏留空间 */
+
+            /* 聊天区域 */
+            .msg-bubble { max-width: 88%; }
+            .chat-input-area { padding: 0.75rem !important; }
+
+            /* 统计卡片 */
+            .stats-grid-2col { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+            .stats-section-card { padding: 1rem; border-radius: 12px; }
+            .section-title { font-size: 0.9rem; }
+
+            /* 表格 */
+            .model-stats-table { font-size: 0.8rem; }
+            .model-stats-table th,
+            .model-stats-table td { padding: 0.5rem 0.35rem; }
+
+            /* 历史记录 */
+            .history-item { padding: 0.65rem 0; flex-wrap: wrap; gap: 0.5rem; }
+            .history-model { font-size: 0.82rem; }
+
+            /* Toast */
+            .toast { left: 1rem; right: 1rem; transform: translateX(0); bottom: 1rem; }
+        }
+
+        /* 超小屏 (iPhone SE 等) */
+        @media (max-width: 375px) {
+            .stats-grid-2col { grid-template-columns: 1fr; }
+            .model-stats-table th,
+            .model-stats-table td { padding: 0.4rem 0.25rem; font-size: 0.75rem; }
+        }
+
         /* ==================== 节点连接页面样式 ==================== */
         .page-connect {
             padding: 2rem;
