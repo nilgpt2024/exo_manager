@@ -2633,7 +2633,7 @@ function buildLaunchCommand(d) {
     var addr = d.server_addr || '<FRPS_SERVER_IP>';
     var lport = d.local_port || 50051;
     var bport = d.bind_port || '7000';
-    var mgr = 'http://' + addr + ':8080';
+    var mgr = location.protocol + '//' + location.host;
     return (
         'python -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId +
         ' --node-port ' + lport +
@@ -2848,7 +2848,7 @@ function generateWinScript(d) {
         ':: ---- Start node ----',
         'echo Starting node... Press Ctrl+C to stop.',
         'echo.',
-        '"%EXO_PYTHON%" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager http://' + addr + ':8080',
+        '"%EXO_PYTHON%" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager ' + location.protocol + '//' + location.host,
         '',
         'pause'
     ].join('\r\n');
@@ -2910,7 +2910,7 @@ function generateLinuxScript(d) {
         'echo "Starting node..."',
         'echo "Press Ctrl+C to stop."',
         'echo ""',
-        '"$PYTHON_EXE" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager http://' + addr + ':8080',
+        '"$PYTHON_EXE" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager ' + location.protocol + '//' + location.host,
     ].join('\n');
 }
 

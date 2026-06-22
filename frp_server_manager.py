@@ -587,8 +587,11 @@ class FRPServerManager:
                     lines.append(f'{k} = {v}')
         return "\n".join(lines) + "\n"
 
-    def _build_launch_command(self, node_id: str, local_port: int, server_addr: str, manager_port: int = 8080) -> str:
+    def _build_launch_command(self, node_id: str, local_port: int, server_addr: str, manager_port: int = None) -> str:
         """构建 exo 节点启动命令"""
+        import os
+        if manager_port is None:
+            manager_port = int(os.getenv("EXO_MANAGER_PORT", "8080"))
         token = self.config.token or ""
         safe_token = token.replace("'", "'\\''")
         mgr = f"http://{server_addr}:{manager_port}" if manager_port else f"http://{server_addr}"
@@ -665,7 +668,7 @@ class FRPServerManager:
         local_port: int = 50051,
         server_addr: str = "",
         manager_addr: str = "",
-        manager_port: int = 8080,
+        manager_port: int = None,
     ) -> Dict[str, Any]:
         """
         获取用户的 FRP 连接信息和 exo 启动命令
@@ -681,6 +684,9 @@ class FRPServerManager:
         Returns:
             含 token、secretKey、launch_command、frpc_toml_config 的字典
         """
+        import os
+        if manager_port is None:
+            manager_port = int(os.getenv("EXO_MANAGER_PORT", "8080"))
         remote_port = self.calculate_remote_port(user_node_id)
         token = self.config.token or ""
         secret_key = hashlib.sha256(token.encode('utf-8')).hexdigest()[:16] if token else ""
