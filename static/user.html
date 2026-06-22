@@ -2660,9 +2660,17 @@ async function loadConnectionInfo() {
         loadMyNodes();
 
         // 如果用户还没有自定义节点列表，用默认值初始化
+        // 注意: 每台设备必须有唯一的 node_id，避免 frps 代理名冲突
         if (myNodes.length === 0 && connectData && connectData.node_id) {
+            var baseId = connectData.node_id;
+            // 用 localStorage 随机标识区分不同设备，确保多机 node_id 唯一
+            var deviceTag = localStorage.getItem('exo_device_tag');
+            if (!deviceTag) {
+                deviceTag = '_d' + Math.random().toString(36).substring(2, 6);
+                localStorage.setItem('exo_device_tag', deviceTag);
+            }
             myNodes = [{
-                node_id: connectData.node_id,
+                node_id: baseId + deviceTag,
                 local_port: 50051,
                 label: '我的设备'
             }];
