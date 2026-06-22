@@ -108,91 +108,6 @@ def get_model_library() -> Dict[str, ModelSpec]:
     return _load_model_library()
 
 
-# 预定义模型库（保留作为默认值，实际使用从配置文件加载）
-MODEL_LIBRARY: Dict[str, ModelSpec] = {
-    "qwen-3-0.6b": ModelSpec(
-        model_id="Qwen/Qwen3-0.6B",
-        pretty_name="Qwen 3 0.6B",
-        total_layers=28,
-        layer_memory_mb=100,
-        param_count=0.6,
-        category="general",
-        priority=0.8
-    ),
-    "qwen-3-4b": ModelSpec(
-        model_id="Qwen/Qwen3-4B",
-        pretty_name="Qwen 3 4B",
-        total_layers=36,
-        layer_memory_mb=215,
-        param_count=4,
-        category="general",
-        priority=1.0
-    ),
-    "qwen-3-vl-2b": ModelSpec(
-        model_id="Qwen/Qwen3-VL-2B-Instruct",
-        pretty_name="Qwen 3 VL 2B",
-        total_layers=28,
-        layer_memory_mb=240,
-        param_count=2,
-        category="vision",
-        priority=0.9
-    ),
-    "qwen-3-vl-4b": ModelSpec(
-        model_id="Qwen/Qwen3-VL-4B-Instruct",
-        pretty_name="Qwen 3 VL 4B",
-        total_layers=36,
-        layer_memory_mb=380,
-        param_count=4,
-        category="vision",
-        priority=1.0
-    ),
-    "fara-7b": ModelSpec(
-        model_id="microsoft/Fara-7B-INT8",
-        pretty_name="Fara 7B (Microsoft Computer Use Agent)",
-        total_layers=28,
-        layer_memory_mb=560,
-        param_count=7,
-        category="agent",
-        priority=0.7
-    ),
-    "qwen-2.5-vl-3b": ModelSpec(
-        model_id="Qwen/Qwen2.5-VL-3B-Instruct",
-        pretty_name="Qwen 2.5 VL 3B",
-        total_layers=36,
-        layer_memory_mb=330,
-        param_count=3,
-        category="vision",
-        priority=0.9
-    ),
-    "llama-3.2-1b": ModelSpec(
-        model_id="unsloth/Llama-3.2-1B-Instruct",
-        pretty_name="Llama 3.2 1B",
-        total_layers=16,
-        layer_memory_mb=250,
-        param_count=1,
-        category="general",
-        priority=0.7
-    ),
-    "qwen-3-tts-1.7b": ModelSpec(
-        model_id="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
-        pretty_name="Qwen 3 TTS 1.7B (VoiceDesign)",
-        total_layers=36,
-        layer_memory_mb=200,
-        param_count=1.7,
-        category="audio",
-        priority=0.8
-    ),
-    "dummy": ModelSpec(
-        model_id="dummy",
-        pretty_name="Dummy (测试用)",
-        total_layers=8,
-        layer_memory_mb=10,
-        param_count=0.01,
-        category="test",
-        priority=0.1
-    ),
-}
-
 # ============================================================
 #  分配策略枚举
 # ============================================================
@@ -305,7 +220,7 @@ class AutoModelAllocator:
             manager: EXOClusterManager 实例
         """
         self.manager = manager
-        self.model_library = get_model_library() or MODEL_LIBRARY.copy()
+        self.model_library = get_model_library()
         self.allocation_history: List[ModelAllocationPlan] = []
         self._current_plan: Optional[ModelAllocationPlan] = None
 
@@ -544,7 +459,7 @@ class AutoModelAllocator:
         # 创建节点资源的可变副本（用于跟踪分配过程）
         node_states = {n.node_id: n.usable_memory_mb for n in nodes}
 
-        # 构建反向映射：spec.model_id (HF repo ID) → MODEL_LIBRARY key (短名)
+        # 构建反向映射：spec.model_id (HF repo ID) → 模型库 key (短名)
         _name_map = {spec.model_id: lib_key for lib_key, spec in self.model_library.items()}
 
         def _get_short_name(spec) -> str:

@@ -53,7 +53,7 @@ import json
 import hashlib
 
 # 导入基础分配器中的类型定义
-from auto_model_allocator import AutoModelAllocator, MODEL_LIBRARY, NodeResource
+from auto_model_allocator import AutoModelAllocator, NodeResource
 
 
 logger = logging.getLogger(__name__)
@@ -292,11 +292,11 @@ class HAModelAllocator:
     HEARTBEAT_TIMEOUT_SECONDS = 30        # 心跳超时(秒)
 
     def __init__(self, manager):
-        from auto_model_allocator import AutoModelAllocator, MODEL_LIBRARY
+        from auto_model_allocator import AutoModelAllocator, get_model_library
 
         self.manager = manager
         self.base_allocator = AutoModelAllocator(manager)
-        self.model_library = MODEL_LIBRARY
+        self.model_library = get_model_library()
 
         # 运行时状态
         self.current_ha_plan: Optional[HAAllocationPlan] = None
@@ -652,7 +652,7 @@ class HAModelAllocator:
 
         # ===== 开始分配 =====
 
-        # 构建反向映射：spec.model_id (HF repo ID) → MODEL_LIBRARY key (短名)
+        # 构建反向映射：spec.model_id (HF repo ID) → 模型库 key (短名)
         # 确保 allocations 字典的 key 是短名（如 "qwen-3-4b"），而非 HF repo ID
         _name_map = {spec.model_id: lib_key for lib_key, spec in self.model_library.items()}
         logger.info(f"[HAModelAlloc] 🔍 名称映射表: {_name_map}")  # 调试日志

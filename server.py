@@ -107,7 +107,7 @@ from auto_model_allocator import (
     AutoModelAllocator,
     AllocationStrategy,
     ModelSpec,
-    MODEL_LIBRARY
+    get_model_library
 )
 
 # 导入节点稳定性管理和故障恢复模块
@@ -5091,7 +5091,7 @@ async def get_model_library():
     models = []
     categories = set()
 
-    for model_id, spec in MODEL_LIBRARY.items():
+    for model_id, spec in get_model_library().items():
         categories.add(spec.category)
         models.append({
             "id": model_id,
@@ -5181,7 +5181,7 @@ async def remove_custom_model(model_id: str):
     try:
         allocator = get_auto_allocator()
 
-        if model_id not in MODEL_LIBRARY:
+        if model_id not in get_model_library():
             raise HTTPException(status_code=404, detail=f"模型不存在: {model_id}")
 
         allocator.remove_model(model_id)

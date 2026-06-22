@@ -539,8 +539,8 @@ class AutoAllocTrigger:
                     try:
                         # 重新调用 load_model_to_cluster
                         spec = None
-                        from auto_model_allocator import get_model_library, MODEL_LIBRARY
-                        model_lib = get_model_library() or MODEL_LIBRARY
+                        from auto_model_allocator import get_model_library
+                        model_lib = get_model_library()
                         for key, lib_spec in model_lib.items():
                             if lib_spec.model_id == pending["model"]:
                                 spec = lib_spec
@@ -677,15 +677,16 @@ class AutoAllocTrigger:
                             logger.info(f"[AutoAllocTrigger] 📦 正在加载模型: {model_id} ({instance_count}个实例/分片)")
 
                             # 查找模型规格（支持短名和完整ID两种方式）
-                            from auto_model_allocator import MODEL_LIBRARY, ModelSpec
+                            from auto_model_allocator import get_model_library, ModelSpec
                             spec: ModelSpec = None
+                            model_lib = get_model_library()
 
                             # 方式1：直接用model_id查找（可能是短名如 "qwen3-0.6b"）
-                            spec = MODEL_LIBRARY.get(model_id)
+                            spec = model_lib.get(model_id)
 
                             # 方式2：如果找不到，遍历所有值匹配 model_id 字段
                             if not spec:
-                                for lib_spec in MODEL_LIBRARY.values():
+                                for lib_spec in model_lib.values():
                                     if lib_spec.model_id == model_id or lib_spec.model_id.lower() == model_id.lower():
                                         spec = lib_spec
                                         break
@@ -693,7 +694,7 @@ class AutoAllocTrigger:
                             # 方式3：大小写不敏感的模糊匹配
                             if not spec:
                                 model_id_lower = model_id.lower()
-                                for key, lib_spec in MODEL_LIBRARY.items():
+                                for key, lib_spec in model_lib.items():
                                     if key == model_id_lower or model_id_lower in key or key in model_id_lower:
                                         spec = lib_spec
                                         logger.info(f"[AutoAllocTrigger] 🔍 模糊匹配: '{model_id}' → '{key}'")
