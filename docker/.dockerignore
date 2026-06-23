@@ -37,7 +37,8 @@ env
 *~
 
 # 数据文件 (运行时生成, 不打包进镜像)
-data/
+data/*
+!data/custom_models.json    # 模型配置作为默认模板打包进镜像
 logs/
 *.db
 *.sqlite3
