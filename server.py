@@ -666,30 +666,7 @@ logger.info("✅ FRP Server 管理路由已注册 (/api/frps/*)")
 # ==================== 自定义模型配置管理 ====================
 CUSTOM_MODELS_FILE = Path(__file__).parent / "data" / "custom_models.json"
 
-BUILTIN_MODEL_CARDS = {
-    "qwen-3-0.6b": {"layers": 28, "repo": {"PyTorchQwen3InferenceEngine": "Qwen/Qwen3-0.6B"}},
-    "qwen-3-4b": {"layers": 36, "repo": {"PyTorchQwen3InferenceEngine": "Qwen/Qwen3-4B"}},
-    "qwen-3-vl-2b": {"layers": 28, "repo": {"PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-2B-Instruct"}},
-    "qwen-3-vl-4b": {"layers": 36, "repo": {"PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-4B-Instruct"}},
-    "qwen-3-tts-1.7b": {"layers": 36, "repo": {"PyTorchQwen3TTSInferenceEngine": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"}},
-    "fara-7b": {"layers": 28, "repo": {"PyTorchQwen2_5VlInferenceEngine": "microsoft/Fara-7B-INT8"}},
-    "qwen-2.5-vl-3b": {"layers": 36, "repo": {"PyTorchQwen2_5VlInferenceEngine": "Qwen/Qwen2.5-VL-3B-Instruct"}},
-    "llama-3.2-1b": {"layers": 16, "repo": {"PyTorchLlama3InferenceEngine": "unsloth/Llama-3.2-1B-Instruct"}},
-    "dummy": {"layers": 8, "repo": {"DummyInferenceEngine": "dummy"}},
-}
-
-BUILTIN_PRETTY_NAMES = {
-    "qwen-3-0.6b": "Qwen 3 0.6B",
-    "qwen-3-4b": "Qwen 3 4B",
-    "qwen-3-vl-2b": "Qwen 3 VL 2B",
-    "qwen-3-vl-4b": "Qwen 3 VL 4B",
-    "qwen-3-tts-1.7b": "Qwen 3 TTS 1.7B (VoiceDesign)",
-    "fara-7b": "Fara 7B (Microsoft Computer Use Agent)",
-    "qwen-2.5-vl-3b": "Qwen 2.5 VL 3B",
-    "llama-3.2-1b": "Llama 3.2 1B",
-    "dummy": "Dummy (测试用)",
-}
-
+# 模型配置：唯一数据源为 data/custom_models.json，无硬编码默认值
 custom_model_cards: Dict[str, Dict] = {}
 custom_pretty_names: Dict[str, str] = {}
 
@@ -701,9 +678,9 @@ def load_custom_models():
                 data = json.load(f)
                 custom_model_cards = data.get('model_cards', {})
                 custom_pretty_names = data.get('pretty_names', {})
-                logger.info(f"[Models] 已加载 {len(custom_model_cards)} 个自定义模型")
+            logger.info(f"[Models] 已加载 {len(custom_model_cards)} 个模型（来自 custom_models.json）")
         else:
-            logger.info("[Models] 未找到自定义模型配置文件，使用内置默认")
+            logger.info("[Models] 未找到自定义模型配置文件，模型列表为空")
     except Exception as e:
         logger.error(f"[Models] 加载自定义模型失败: {e}")
 
@@ -2066,32 +2043,28 @@ async def get_available_models():
     返回所有已配置的模型，包括模型ID、名称、层数等信息
     前端可用于下拉选择
     """
-    all_model_cards = {**BUILTIN_MODEL_CARDS, **custom_model_cards}
-    all_pretty_names = {**BUILTIN_PRETTY_NAMES, **custom_pretty_names}
-    source = "builtin_custom" if custom_model_cards else "builtin_defaults"
-    
+    # 唯一数据源：custom_models.json
+    source = "custom" if custom_model_cards else "empty"
+
     models_list = []
-    
-    for model_id, config in all_model_cards.items():
+
+    for model_id, config in custom_model_cards.items():
         layers = config.get("layers", 0)
         repo_info = config.get("repo", {})
-        
+
         repo_name = "unknown"
         for engine_name, repo in repo_info.items():
             if 'PyTorch' in engine_name or 'Dummy' in engine_name:
                 repo_name = repo
                 break
-        
-        is_custom = model_id in custom_model_cards
-        is_builtin = model_id in BUILTIN_MODEL_CARDS
-        
+
         models_list.append({
             "model_id": model_id,
-            "pretty_name": all_pretty_names.get(model_id, model_id),
+            "pretty_name": custom_pretty_names.get(model_id, model_id),
             "layers": layers,
             "repo": repo_name,
             "engines": list(repo_info.keys()),
-            "source": "custom" if is_custom else ("builtin" if is_builtin else "remote")
+            "source": "custom"
         })
     
     models_list.sort(key=lambda x: (x["source"] != "custom", x["pretty_name"]))
@@ -2535,8 +2508,8 @@ async def pool_load_model(request: Dict[str, Any]):
     
     logger.info(f"📥 收到加载模型请求: model_id={model_id}, instance_count={instance_count}, model_path={model_path}")
     
-    # 从内置配置中获取层数信息和默认路径
-    all_model_configs = {**BUILTIN_MODEL_CARDS, **custom_model_cards}
+    # 从配置文件中获取层数信息和默认路径
+    all_model_configs = custom_model_cards
     
     if model_id in all_model_configs:
         config = all_model_configs[model_id]
