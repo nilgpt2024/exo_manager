@@ -6619,16 +6619,66 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 const result = await apiCall('/api/models/custom');
                 if (result && result.success) {
                     document.getElementById('customModelsCount').textContent = result.data.total;
+                    // 同时缓存数据供引擎下拉框使用
+                    window._customModelsCache = result.data;
                 }
             } catch (e) {
                 console.error('加载自定义模型数量失败:', e);
             }
         }
 
-        function showCustomModelDialog(mode, modelData = null) {
+        /** 从 custom_models.json 的 repo 键收集所有引擎类型，动态填充下拉框 */
+        async function populateEngineTypeOptions() {
+            const select = document.getElementById('customEngineType');
+            if (!select) return;
+
+            try {
+                let data = window._customModelsCache;
+                if (!data) {
+                    const result = await apiCall('/api/models/custom');
+                    if (result?.success) {
+                        data = result.data;
+                        window._customModelsCache = data;
+                    }
+                }
+
+                // 收集所有已用引擎类型
+                const engineSet = new Set();
+                if (data?.models) {
+                    for (const m of Object.values(data.models)) {
+                        if (m.repo) {
+                            Object.keys(m.repo).forEach(e => engineSet.add(e));
+                        }
+                    }
+                }
+
+                // 填充下拉框
+                select.innerHTML = '';
+                if (engineSet.size === 0) {
+                    select.innerHTML = '<option value="">(无可用引擎)</option>';
+                    return;
+                }
+                // 按名称排序
+                const sorted = [...engineSet].sort();
+                sorted.forEach(engine => {
+                    const opt = document.createElement('option');
+                    opt.value = engine;
+                    // 友好显示名：去掉 InferenceEngine 后缀
+                    opt.textContent = engine.replace(/InferenceEngine$/, '');
+                    select.appendChild(opt);
+                });
+            } catch (e) {
+                console.error('加载引擎类型失败:', e);
+            }
+        }
+
+        async function showCustomModelDialog(mode, modelData = null) {
             const dialog = document.getElementById('customModelDialog');
             const title = document.getElementById('customModelDialogTitle');
             const form = document.getElementById('customModelForm');
+
+            // 动态填充引擎类型下拉框（从 custom_models.json 的 repo 键收集）
+            await populateEngineTypeOptions();
             
             if (mode === 'add') {
                 title.textContent = '添加自定义模型';
@@ -6647,10 +6697,13 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 
                 const repoObj = modelData.repo || {};
                 const firstRepo = Object.values(repoObj)[0] || '';
-                const firstEngine = Object.keys(repoObj)[0] || 'PyTorchLlama3InferenceEngine';
+                const firstEngine = Object.keys(repoObj)[0] || '';
                 
                 document.getElementById('customRepo').value = firstRepo;
-                document.getElementById('customEngineType').value = firstEngine;
+                // 编辑模式：选中已有引擎（populateEngineTypeOptions 已填充选项）
+                if (firstEngine) {
+                    document.getElementById('customEngineType').value = firstEngine;
+                }
             }
             
             dialog.style.display = 'flex';
@@ -8788,12 +8841,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                         <label><i class="fas fa-cog"></i> 引擎类型</label>
                         <select id="customEngineType"
                                 style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;">
-                            <option value="PyTorchLlama3InferenceEngine">PyTorch Llama 3</option>
-                            <option value="PyTorchQwen3InferenceEngine">PyTorch Qwen 3</option>
-                            <option value="PyTorchQwen3VLInferenceEngine">PyTorch Qwen 3 VL</option>
-                            <option value="PyTorchQwen3TTSInferenceEngine">PyTorch Qwen 3 TTS</option>
-                            <option value="PyTorchQwen2_5VlInferenceEngine">PyTorch Qwen 2.5 VL</option>
-                            <option value="DummyInferenceEngine">Dummy (测试用)</option>
+                            <option value="">-- 从配置文件加载 --</option>
                         </select>
                     </div>
                 </div>
