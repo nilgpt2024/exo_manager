@@ -670,6 +670,50 @@ CUSTOM_MODELS_FILE = Path(__file__).parent / "data" / "custom_models.json"
 custom_model_cards: Dict[str, Dict] = {}
 custom_pretty_names: Dict[str, str] = {}
 
+# 默认模型配置（首次部署 / Docker 首次启动时自动创建）
+DEFAULT_MODEL_CONFIG = {
+    "model_cards": {
+        "qwen-3-0.6b": {
+            "layers": 28,
+            "repo": {"PyTorchQwen3InferenceEngine": "Qwen/Qwen3-0.6B"},
+            "allocation": {"layer_memory_mb": 100, "param_count": 0.6, "category": "general", "priority": 0.8}
+        },
+        "qwen-3-4b": {
+            "layers": 36,
+            "repo": {"PyTorchQwen3InferenceEngine": "Qwen/Qwen3-4B"},
+            "allocation": {"layer_memory_mb": 215, "param_count": 4, "category": "general", "priority": 1.0}
+        },
+        "qwen-3-vl-2b": {
+            "layers": 28,
+            "repo": {"PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-2B-Instruct"},
+            "allocation": {"layer_memory_mb": 240, "param_count": 2, "category": "vision", "priority": 0.9}
+        },
+        "qwen-3-vl-4b": {
+            "layers": 36,
+            "repo": {"PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-4B-Instruct"},
+            "allocation": {"layer_memory_mb": 380, "param_count": 4, "category": "vision", "priority": 1.0}
+        },
+        "qwen-2.5-vl-3b": {
+            "layers": 36,
+            "repo": {"PyTorchQwen2_5VlInferenceEngine": "Qwen/Qwen2.5-VL-3B-Instruct"},
+            "allocation": {"layer_memory_mb": 330, "param_count": 3, "category": "vision", "priority": 0.9}
+        },
+        "llama-3.2-1b": {
+            "layers": 16,
+            "repo": {"PyTorchLlama3InferenceEngine": "unsloth/Llama-3.2-1B-Instruct"},
+            "allocation": {"layer_memory_mb": 250, "param_count": 1, "category": "general", "priority": 0.7}
+        }
+    },
+    "pretty_names": {
+        "qwen-3-0.6b": "Qwen 3 0.6B",
+        "qwen-3-4b": "Qwen 3 4B",
+        "qwen-3-vl-2b": "Qwen 3 VL 2B",
+        "qwen-3-vl-4b": "Qwen 3 VL 4B",
+        "qwen-2.5-vl-3b": "Qwen 2.5 VL 3B",
+        "llama-3.2-1b": "Llama 3.2 1B"
+    }
+}
+
 def load_custom_models():
     global custom_model_cards, custom_pretty_names
     try:
@@ -680,7 +724,12 @@ def load_custom_models():
                 custom_pretty_names = data.get('pretty_names', {})
             logger.info(f"[Models] 已加载 {len(custom_model_cards)} 个模型（来自 custom_models.json）")
         else:
-            logger.info("[Models] 未找到自定义模型配置文件，模型列表为空")
+            # 首次启动：自动创建默认配置文件（Docker 部署场景）
+            logger.info("[Models] 未找到配置文件，正在创建默认配置...")
+            custom_model_cards = DEFAULT_MODEL_CONFIG["model_cards"]
+            custom_pretty_names = DEFAULT_MODEL_CONFIG["pretty_names"]
+            save_custom_models()
+            logger.info(f"[Models] 已创建默认配置，包含 {len(custom_model_cards)} 个模型")
     except Exception as e:
         logger.error(f"[Models] 加载自定义模型失败: {e}")
 
