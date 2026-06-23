@@ -39,6 +39,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制项目文件
 COPY . .
 
+# 将默认模型配置模板复制到独立路径（不被 volume mount 遮盖）
+RUN mkdir -p /app/templates && cp data/custom_models.json /app/templates/
+
 # 创建数据目录 (用于存储数据库、日志等)
 RUN mkdir -p /app/data /app/logs
 

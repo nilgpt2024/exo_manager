@@ -67,8 +67,8 @@ services:
 
     # 数据卷挂载 (持久化数据)
     volumes:
-      # 持久化数据目录 (用户数据、API Key、数据库等)
-      - exo-data:/app/data
+      # 绑定挂载本地 data 目录（本地修改实时同步到容器）
+      - ../data:/app/data
       # 持久化日志目录
       - exo-logs:/app/logs
       # 可选: 挂载自定义配置文件
@@ -104,7 +104,5 @@ services:
 
 # 定义命名卷 (用于数据持久化)
 volumes:
-  exo-data:
-    driver: local
   exo-logs:
     driver: local

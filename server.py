@@ -670,22 +670,21 @@ CUSTOM_MODELS_FILE = Path(__file__).parent / "data" / "custom_models.json"
 custom_model_cards: Dict[str, Dict] = {}
 custom_pretty_names: Dict[str, str] = {}
 
-# 默认模型配置模板路径（Docker 镜像内嵌，用于首次部署初始化）
-_DEFAULT_TEMPLATE_FILE = Path(__file__).parent / "data" / "custom_models.json"
+# 默认模型配置模板路径（Docker 镜像内嵌到 /app/templates/，不被 volume mount 遮盖）
+_TEMPLATE_PATHS = [
+    Path("/app/templates/custom_models.json"),   # Docker 部署
+    Path(__file__).parent / "data" / "custom_models.json",  # 本地开发
+]
 
 def _try_restore_from_template():
     """Docker 首次部署时，从镜像内嵌的默认模板恢复配置"""
     try:
-        # 镜像内嵌模板路径
-        template = Path("/app/data/custom_models.json")
-        if not template.exists():
-            # 本地开发：直接用源码目录下的文件
-            template = _DEFAULT_TEMPLATE_FILE
-        if template.exists() and template.stat().st_size > 0:
-            import shutil
-            shutil.copy2(template, CUSTOM_MODELS_FILE)
-            logger.info(f"[Models] 已从默认模板恢复: {template}")
-            return True
+        for template in _TEMPLATE_PATHS:
+            if template.exists() and template.stat().st_size > 0:
+                import shutil
+                shutil.copy2(template, CUSTOM_MODELS_FILE)
+                logger.info(f"[Models] 已从默认模板恢复: {template}")
+                return True
     except Exception as e:
         logger.warning(f"[Models] 从模板恢复失败: {e}")
     return False
