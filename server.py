@@ -3935,25 +3935,28 @@ class NodeWSManager:
                 logger.info(f"[NodeWS] ✅ 节点 {node_id} 注册成功")
 
                 # 🔑 关键修复：同步注册到集群管理器，使 /api/nodes、Cluster Status、LoadBalancer 可见
-                if manager and node_id not in manager.nodes:
+                if manager:
                     try:
-                        # 从 WS 连接获取客户端地址
-                        client_host = getattr(ws, 'client', None)
-                        client_addr = getattr(client_host, 'host', '127.0.0.1') if client_host else '127.0.0.1'
+                        if node_id not in manager.nodes:
+                            # 从 WS 连接获取客户端地址
+                            client_host = getattr(ws, 'client', None)
+                            client_addr = getattr(client_host, 'host', '127.0.0.1') if client_host else '127.0.0.1'
 
-                        await manager.add_node(
-                            node_id=node_id,
-                            address=client_addr,
-                            port=0,  # WS 连接不需要 gRPC 端口
-                            chatgpt_api_port=data.get("chatgpt_api_port", 52415),
-                            device_info=data.get("device_info", {}),
-                            skip_grpc_connect=True  # WS 通道已建立，跳过 gRPC 连接
-                        )
-                        # 标记为在线（WS 已连接）
+                            await manager.add_node(
+                                node_id=node_id,
+                                address=client_addr,
+                                port=0,
+                                chatgpt_api_port=data.get("chatgpt_api_port", 52415),
+                                device_info=data.get("device_info", {}),
+                                skip_grpc_connect=True
+                            )
+                            logger.info(f"[NodeWS] 📋 节点 {node_id} 已同步到集群管理器 (地址: {client_addr})")
+
+                        # 无论新增还是已存在，WS 注册成功即标记为在线
                         if node_id in manager.nodes:
                             manager.nodes[node_id].status = NodeStatus.ONLINE
                             manager.nodes[node_id].error_message = ""
-                        logger.info(f"[NodeWS] 📋 节点 {node_id} 已同步到集群管理器 (地址: {client_addr})")
+                            manager.nodes[node_id].last_heartbeat = time.time()
                     except Exception as e:
                         logger.warning(f"[NodeWS] ⚠️ 同步节点到集群管理器失败: {e}")
 

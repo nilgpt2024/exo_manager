@@ -1694,21 +1694,34 @@ class EXOClusterManager:
                             registry_changed = True
 
                     else:
-                        # 节点不健康 → 检测是否为新掉线
-                        was_online = connector.node_info.status.value == 'online'
-                        connector.node_info.status = NodeStatus.OFFLINE
+                        # 节点不健康 → 先做 WS 连接二次验证（WS节点可能 gRPC health_check 失败但仍在线）
+                        is_actually_offline = True
+                        if _is_ws_available():
+                            _ws_mgr = _get_node_ws_manager()
+                            if _ws_mgr and _ws_mgr.is_node_connected(node_id):
+                                # WS 仍连接，保持在线状态，跳过掉线处理
+                                connector.node_info.status = NodeStatus.ONLINE
+                                connector.node_info.error_message = ""
+                                online_count += 1
+                                node_info = self.nodes[node_id]
+                                total_memory += node_info.device_info.get('memory', 0)
+                                is_actually_offline = False
 
-                        if was_online and node_id not in _handled_failures:
-                            newly_failed_nodes.append(node_id)
-                            _handled_failures.add(node_id)
-                            logger.error(f"[监控循环] 节点 {node_id} 掉线！")
+                        if is_actually_offline:
+                            was_online = connector.node_info.status.value == 'online'
+                            connector.node_info.status = NodeStatus.OFFLINE
 
-                            # 发射系统日志：节点掉线
-                            try:
-                                from sys_logger import sys_log as _sl
-                                _sl.log(_sl.ERROR, "node", f"节点 {node_id} 掉线", {"node_id": node_id})
-                            except Exception:
-                                pass
+                            if was_online and node_id not in _handled_failures:
+                                newly_failed_nodes.append(node_id)
+                                _handled_failures.add(node_id)
+                                logger.error(f"[监控循环] 节点 {node_id} 掉线！")
+
+                                # 发射系统日志：节点掉线
+                                try:
+                                    from sys_logger import sys_log as _sl
+                                    _sl.log(_sl.ERROR, "node", f"节点 {node_id} 掉线", {"node_id": node_id})
+                                except Exception:
+                                    pass
 
                 # ====== 故障恢复处理 ======
                 for failed_node_id in newly_failed_nodes:
