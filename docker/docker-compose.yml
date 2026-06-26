@@ -15,13 +15,8 @@ services:
       context: ../
       dockerfile: docker/Dockerfile
     image: exo-manager:latest
+    network_mode: host  # 关键
     container_name: exo-manager
-
-    # 端口映射: 主机端口:容器端口
-    ports:
-      - "18080:8080"          # Web UI
-      - "10007:10007"         # FRP Server 控制端口
-      - "30000-50000:30000-50000/tcp"  # FRP 动态 TCP 代理端口范围
 
     # 网络模式: bridge (默认)
     # network_mode: host
@@ -30,12 +25,13 @@ services:
     environment:
       # 运行环境
       - EXO_ENV=${EXO_ENV:-development}
-      - EXO_PORT=8080
+      - EXO_PORT=18080
+      - TZ=${TZ:-Asia/Shanghai}
 
       # 安全配置
       - EXO_FORCE_HTTPS=${EXO_FORCE_HTTPS:-false}
       - EXO_DEV_MODE=${EXO_DEV_MODE:-false}
-      - EXO_CORS_ORIGINS=${EXO_CORS_ORIGINS:-http://localhost:8080}
+      - EXO_CORS_ORIGINS=${EXO_CORS_ORIGINS:-http://localhost:18080}
 
       # 管理员密码 (生产环境必须修改!)
       - EXO_ADMIN_DEFAULT_PASSWORD=${EXO_ADMIN_DEFAULT_PASSWORD:-}
@@ -75,6 +71,9 @@ services:
       - ../data:/app/data
       # 绑定挂载本地 logs 目录，日志文件可直接在 f:\exoProject\exo_manager\logs 查看
       - ../logs:/app/logs
+      # 挂载主机时区文件，保持容器与宿主机时区一致
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
       # 可选: 挂载自定义配置文件
       # - ./config:/app/config:ro
 

@@ -18,14 +18,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     EXO_ENV=production \
-    EXO_PORT=8080
+    EXO_PORT=18080
 
-# 安装系统依赖 (gRPC 和加密库需要)
+# 安装系统依赖 (gRPC 和加密库需要, tzdata 用于时区支持)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libffi-dev \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# 设置默认时区
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 # 创建工作目录
 WORKDIR /app
@@ -46,11 +51,11 @@ RUN mkdir -p /app/templates && cp data/custom_models.json /app/templates/
 RUN mkdir -p /app/data /app/logs
 
 # 暴露端口
-EXPOSE 8080
+EXPOSE 18080
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/cluster/status')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:18080/api/cluster/status')" || exit 1
 
 # 启动命令 (使用 start_manager.py 支持完整功能)
 CMD ["python", "start_manager.py"]
