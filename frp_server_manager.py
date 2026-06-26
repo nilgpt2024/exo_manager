@@ -82,6 +82,8 @@ class ConnectedClient:
     node_name: str = ""
     remote_port: int = 0
     local_port: int = 50051
+    chatgpt_remote_port: int = 0
+    chatgpt_local_port: int = 52415
     status: str = "offline"  # online, offline, error
     connected_at: float = 0.0
     last_heartbeat: float = 0.0
@@ -497,9 +499,15 @@ class FRPServerManager:
     # ==================== 远程端口计算 ====================
 
     @staticmethod
-    def calculate_remote_port(node_id: str) -> int:
-        """根据 node_id 哈希计算远程端口 (30000-50000)"""
-        hash_val = int(hashlib.md5(node_id.encode()).hexdigest()[:8], 16)
+    def calculate_remote_port(node_id: str, service: str = "") -> int:
+        """根据 node_id 哈希计算远程端口 (30000-50000)
+
+        Args:
+            node_id: 节点 ID
+            service: 服务标识，用于区分同一节点的不同服务（如 gRPC / chatgpt）
+        """
+        hash_input = f"{node_id}:{service}" if service else node_id
+        hash_val = int(hashlib.md5(hash_input.encode()).hexdigest()[:8], 16)
         return 30000 + (hash_val % 20000)
 
     # ==================== 客户端配置生成 ====================
@@ -508,11 +516,13 @@ class FRPServerManager:
         self,
         node_id: str,
         local_port: int = 50051,
+        chatgpt_local_port: int = 52415,
         enable_p2p: bool = True,
         node_name: str = "",
     ) -> Dict[str, Any]:
         """注册客户端并生成 frpc 配置"""
         remote_port = self.calculate_remote_port(node_id)
+        chatgpt_remote_port = self.calculate_remote_port(node_id, service="chatgpt")
         token = self.config.token
         secret_key = hashlib.sha256(token.encode('utf-8')).hexdigest()[:16] if token else ""
 
@@ -533,6 +543,7 @@ class FRPServerManager:
                 "localPort": local_port,
             })
 
+        # gRPC / exo 节点间通信端口
         config["proxies"].append({
             "name": f"exo_tcp_{node_id}",
             "type": "tcp",
@@ -541,9 +552,24 @@ class FRPServerManager:
             "remotePort": remote_port,
         })
 
+        # ChatGPT API HTTP 端口（manager 代理 chat 请求用）
+        config["proxies"].append({
+            "name": f"exo_chatgpt_{node_id}",
+            "type": "tcp",
+            "localIP": "127.0.0.1",
+            "localPort": chatgpt_local_port,
+            "remotePort": chatgpt_remote_port,
+        })
+
         self.client_configs[node_id] = {
             **config,
-            "_meta": {"generated_at": time.time(), "remote_port": remote_port, "node_id": node_id},
+            "_meta": {
+                "generated_at": time.time(),
+                "remote_port": remote_port,
+                "chatgpt_remote_port": chatgpt_remote_port,
+                "chatgpt_local_port": chatgpt_local_port,
+                "node_id": node_id,
+            },
         }
 
         self.connected_clients[node_id] = ConnectedClient(
@@ -551,6 +577,8 @@ class FRPServerManager:
             node_name=node_name or node_id,
             remote_port=remote_port,
             local_port=local_port,
+            chatgpt_remote_port=chatgpt_remote_port,
+            chatgpt_local_port=chatgpt_local_port,
             status="registered",
             connected_at=time.time(),
             enable_p2p=enable_p2p,
@@ -565,6 +593,7 @@ class FRPServerManager:
             **config,
             "toml_content": toml_content,
             "launch_command": launch_cmd,
+            "chatgpt_remote_port": chatgpt_remote_port,
         }
 
     def _config_to_toml(self, config: Dict) -> str:
@@ -666,6 +695,7 @@ class FRPServerManager:
         self,
         user_node_id: str,
         local_port: int = 50051,
+        chatgpt_local_port: int = 52415,
         server_addr: str = "",
         manager_addr: str = "",
         manager_port: int = None,
@@ -679,6 +709,7 @@ class FRPServerManager:
         Args:
             user_node_id: 节点 ID（基于 user_id 自动生成）
             local_port: 本地 gRPC 端口
+            chatgpt_local_port: 本地 ChatGPT API HTTP 端口
             server_addr: frps 公网地址（从请求 URL 自动获取）
 
         Returns:
@@ -688,6 +719,7 @@ class FRPServerManager:
         if manager_port is None:
             manager_port = int(os.getenv("EXO_MANAGER_PORT", "8080"))
         remote_port = self.calculate_remote_port(user_node_id)
+        chatgpt_remote_port = self.calculate_remote_port(user_node_id, service="chatgpt")
         token = self.config.token or ""
         secret_key = hashlib.sha256(token.encode('utf-8')).hexdigest()[:16] if token else ""
 
@@ -702,6 +734,7 @@ class FRPServerManager:
             f'--discovery-module frp '
             f'--node-id {user_node_id} '
             f'--node-port {local_port} '
+            f'--chatgpt-api-port {chatgpt_local_port} '
             f'--frp-server-addr {addr} '
             f'--frp-server-port {self.config.bind_port} '
             f"--frp-token '{safe_token}' "
@@ -711,6 +744,7 @@ class FRPServerManager:
         config = self.generate_frpc_config_for_user(
             node_id=user_node_id,
             local_port=local_port,
+            chatgpt_local_port=chatgpt_local_port,
             server_addr=addr,
         )
 
@@ -719,7 +753,9 @@ class FRPServerManager:
             "server_addr": addr,
             "bind_port": self.config.bind_port,
             "remote_port": remote_port,
+            "chatgpt_remote_port": chatgpt_remote_port,
             "local_port": local_port,
+            "chatgpt_local_port": chatgpt_local_port,
             "frp_token": token,
             "secret_key": secret_key,
             "p2p_enabled": self.config.enable_xtcp,
@@ -733,10 +769,12 @@ class FRPServerManager:
         self,
         node_id: str,
         local_port: int = 50051,
+        chatgpt_local_port: int = 52415,
         server_addr: Optional[str] = None,
     ) -> str:
         """为用户生成可直接使用的 frpc.toml 配置文本"""
         remote_port = self.calculate_remote_port(node_id)
+        chatgpt_remote_port = self.calculate_remote_port(node_id, service="chatgpt")
         token = self.config.token or ""
         secret_key = hashlib.sha256(token.encode('utf-8')).hexdigest()[:16] if token else ""
         addr = server_addr or "<FRPS_SERVER_IP>"
@@ -764,6 +802,14 @@ class FRPServerManager:
         lines.append('localIP = "127.0.0.1"')
         lines.append(f'localPort = {local_port}')
         lines.append(f'remotePort = {remote_port}')
+
+        lines.append('')
+        lines.append('[[proxies]]')
+        lines.append(f'name = "exo_chatgpt_{node_id}"')
+        lines.append('type = "tcp"')
+        lines.append('localIP = "127.0.0.1"')
+        lines.append(f'localPort = {chatgpt_local_port}')
+        lines.append(f'remotePort = {chatgpt_remote_port}')
 
         return "\n".join(lines) + "\n"
 

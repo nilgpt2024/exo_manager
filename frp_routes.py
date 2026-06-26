@@ -43,6 +43,7 @@ class ClientRegisterRequest(BaseModel):
     """客户端注册请求"""
     node_id: str = Field(..., min_length=1, max_length=64)
     local_port: int = Field(50051, ge=1, le=65535)
+    chatgpt_local_port: int = Field(52415, ge=1, le=65535)
     node_name: str = ""
     enable_p2p: bool = True
 
@@ -51,6 +52,7 @@ class UserConnectionRequest(BaseModel):
     """用户连接请求"""
     node_id: Optional[str] = Field(None, description="节点 ID")
     local_port: int = Field(50051, ge=1, le=65535)
+    chatgpt_local_port: int = Field(52415, ge=1, le=65535)
     server_addr: Optional[str] = Field(None)
 
 
@@ -151,6 +153,7 @@ async def register_client(request: ClientRegisterRequest):
     config = manager.register_client(
         node_id=request.node_id,
         local_port=request.local_port,
+        chatgpt_local_port=request.chatgpt_local_port,
         enable_p2p=request.enable_p2p,
         node_name=request.node_name,
     )
@@ -165,8 +168,12 @@ async def register_client(request: ClientRegisterRequest):
         "toml_content": toml_content,
         "launch_command": launch_cmd,
         "remote_port": config.get("_meta", {}).get("remote_port"),
+        "chatgpt_remote_port": config.get("_meta", {}).get("chatgpt_remote_port"),
         "p2p_enabled": request.enable_p2p,
-        "message": f"配置已生成，远程端口: {config['_meta'].get('remote_port')}"
+        "message": (
+            f"配置已生成 | gRPC 远程端口: {config['_meta'].get('remote_port')} | "
+            f"ChatGPT 远程端口: {config['_meta'].get('chatgpt_remote_port')}"
+        )
     }
 
 
@@ -252,6 +259,7 @@ async def get_user_connection_info(
     request: Request,
     node_id: Optional[str] = Query(None, description="节点 ID"),
     local_port: int = Query(50051, ge=1, le=65535),
+    chatgpt_local_port: int = Query(52415, ge=1, le=65535),
 ):
     """
     获取当前用户的 FRP 连接信息和 exo 启动命令
@@ -292,6 +300,7 @@ async def get_user_connection_info(
     connection_info = manager.get_user_connection_info(
         user_node_id=user_node_id,
         local_port=local_port,
+        chatgpt_local_port=chatgpt_local_port,
         server_addr=server_addr,
         manager_addr=manager_addr,
     )

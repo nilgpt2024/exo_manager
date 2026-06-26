@@ -609,11 +609,14 @@ async def _proxy_to_node(
 
     # 🔧 [修复] 当 chatgpt_url 指向不可达地址（如 FRP 远程 IP）时，
     #     自动 fallback 到本地 127.0.0.1（Manager 与节点同机部署场景）
+    # 注意：如果 chatgpt_api_port 是 FRP 映射端口（>=30000），说明节点通过 FRP 暴露，
+    #       manager 与节点不在同一机器，禁用本地 fallback。
     _mgr_local = _get_manager()
     _local_endpoint = None
     if _mgr_local and node_id in _mgr_local.nodes:
         _ni = _mgr_local.nodes[node_id]
-        if _ni.address not in ("127.0.0.1", "localhost", "0.0.0.0"):
+        _is_frp_chat_port = _ni.chatgpt_api_port >= 30000
+        if _ni.address not in ("127.0.0.1", "localhost", "0.0.0.0") and not _is_frp_chat_port:
             _local_endpoint = f"http://127.0.0.1:{_ni.chatgpt_api_port}/v1/chat/completions"
             logger.debug(f"🔧 [Proxy] 检测到远程地址，已准备本地 fallback: {node_endpoint} → {_local_endpoint}")
 
