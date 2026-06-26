@@ -198,7 +198,6 @@ def get_auto_trigger() -> AutoAllocTrigger:
         raise HTTPException(status_code=503, detail="集群管理器未就绪")
     return _auto_trigger
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 导入系统日志收集器

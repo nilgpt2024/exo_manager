@@ -73,8 +73,8 @@ services:
     volumes:
       # 绑定挂载本地 data 目录（本地修改实时同步到容器）
       - ../data:/app/data
-      # 持久化日志目录
-      - exo-logs:/app/logs
+      # 绑定挂载本地 logs 目录，日志文件可直接在 f:\exoProject\exo_manager\logs 查看
+      - ../logs:/app/logs
       # 可选: 挂载自定义配置文件
       # - ./config:/app/config:ro
 
@@ -106,7 +106,4 @@ services:
         max-size: "50m"
         max-file: "5"
 
-# 定义命名卷 (用于数据持久化)
-volumes:
-  exo-logs:
-    driver: local
+

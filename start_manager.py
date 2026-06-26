@@ -85,6 +85,9 @@ def print_banner(host, port, mode, frp_info=None):
 
 
 def main():
+    from sys_logger import setup_logging
+    setup_logging()
+
     parser = argparse.ArgumentParser(
         description="EXO Cluster Manager - 分布式AI集群管理控制台",
         formatter_class=argparse.RawDescriptionHelpFormatter,

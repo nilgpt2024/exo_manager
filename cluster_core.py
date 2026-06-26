@@ -80,10 +80,6 @@ _grpc_dir = os.path.join(_current_dir, 'grpc')
 if _grpc_dir not in sys.path:
     sys.path.insert(0, _grpc_dir)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
