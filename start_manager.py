@@ -119,8 +119,8 @@ def main():
     parser.add_argument(
         "--port", 
         type=int, 
-        default=8080,
-        help="服务端口号 (默认: 8080)"
+        default=18080,
+        help="服务端口号 (默认: 18080)" 
     )
     
     # 模式选择参数
