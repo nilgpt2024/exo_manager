@@ -28,7 +28,7 @@ import os
 import sys
 import time
 import uuid
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Callable
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
@@ -742,14 +742,25 @@ class NodeConnector:
     
     def _update_loaded_models(self, shard_payload: Dict):
         """更新本地缓存的已加载模型列表"""
+        model_id = shard_payload["model_id"]
+        base_model_id = shard_payload.get("base_model_id")
+        instance_id = shard_payload.get("instance_id")
+        if base_model_id is None:
+            base_model_id = model_id.split("::")[0] if "::" in model_id else model_id
+        if instance_id is None:
+            instance_id = model_id.split("::")[1] if "::" in model_id else "default"
+
         shard_info = {
-            "model_id": shard_payload["model_id"],
+            "model_id": model_id,
+            "base_model_id": base_model_id,
+            "instance_id": instance_id,
+            "model_path": shard_payload.get("model_path", ""),
             "shard": shard_payload["shard"],
             "loaded_at": time.time()
         }
-        
-        existing_models = [m for m in self.node_info.loaded_models 
-                         if m.get("model_id") != shard_payload["model_id"]]
+
+        existing_models = [m for m in self.node_info.loaded_models
+                         if m.get("model_id") != model_id]
         existing_models.append(shard_info)
         self.node_info.loaded_models = existing_models
     
@@ -1247,6 +1258,9 @@ class EXOClusterManager:
         # { base_model_id: { "allocations": [{node_id, start_layer, end_layer, instance_id}], "first_layer_node_id": str } }
         self._allocation_registry: Dict[str, Dict] = {}
 
+        # 新节点加入回调（由上层注册，用于触发自动重分配）
+        self._node_joined_callback: Optional[Callable[[str], Any]] = None
+
         from load_balancer import LoadBalancer
         self.load_balancer = LoadBalancer(self)
         
@@ -1262,6 +1276,18 @@ class EXOClusterManager:
     def set_broadcast_callback(self, callback):
         """设置状态更新广播回调（用于WebSocket推送）"""
         self._broadcast_callback = callback
+
+    def set_node_joined_callback(self, callback):
+        """设置新节点加入回调（用于触发自动重分配）"""
+        self._node_joined_callback = callback
+
+    def _trigger_node_joined_callback(self, node_id: str):
+        """调度新节点加入回调"""
+        if self._node_joined_callback:
+            try:
+                asyncio.create_task(self._node_joined_callback(node_id))
+            except Exception as e:
+                logger.warning(f"⚠️ 新节点加入回调调度失败: {e}")
 
     def rebuild_allocation_registry(self):
         """从各节点的 loaded_models 重建分配注册表
@@ -1570,11 +1596,13 @@ class EXOClusterManager:
             node_info.status = NodeStatus.ONLINE
             node_info.last_heartbeat = time.time()
             logger.info(f"➕ 节点注册成功(WS模式): {node_id}@{address} (跳过gRPC连接)")
+            self._trigger_node_joined_callback(node_id)
         else:
             success = await connector.connect()
 
             if success:
                 logger.info(f"➕ 节点注册成功: {node_id}@{address}:{port} (HTTP:{chatgpt_api_port})")
+                self._trigger_node_joined_callback(node_id)
             else:
                 error_msg = connector.node_info.error_message or "未知错误"
                 logger.warning(f"⚠️ 节点 {node_id} 已记录但连接失败: {error_msg}")
@@ -2056,6 +2084,7 @@ class EXOClusterManager:
                                 "model_id": full_model_id,
                                 "base_model_id": model_id,
                                 "instance_id": instance_id,
+                                "model_path": model_path,
                                 "shard": shard_task["shard"]
                             }
                             connector._update_loaded_models(ws_shard_payload)
@@ -2124,27 +2153,6 @@ class EXOClusterManager:
                         inference_url = fl_connector.node_info.chat_completions_url
                     break
 
-            return {
-                "success": success_count > 0,
-                "model_id": model_id,
-                "instance_id": instance_id,
-                "full_model_id": full_model_id,
-                "inference_url": inference_url,          # 首层节点推理地址（客户端可直连）
-                "first_layer_node_id": first_layer_node_id,  # 首层节点ID
-                "allocation": {
-                    "strategy": strategy,
-                    "total_layers": n_layers,
-                    "nodes_count": total,
-                    "allocations": allocation.allocations
-                },
-                "load_results": results,
-                "summary": {
-                    "success_nodes": success_count,
-                    "failed_nodes": total - success_count,
-                    "total_nodes": total
-                }
-            }
-
             # ✅ 注册分配信息到 _allocation_registry（供 /v1/models 查询首层节点）
             # 支持多首层节点格式（兼容单副本场景）
             if success_count > 0 and allocation.allocations:
@@ -2172,10 +2180,32 @@ class EXOClusterManager:
                     "inference_urls": fl_urls,
                     "inference_url": inference_url,
                     "full_model_id": full_model_id,
+                    "model_path": model_path,
                     "n_layers": n_layers,
                     "updated_at": time.time(),
                 }
                 logger.info(f"📋 [分配注册] 模型 {model_id} -> 首层节点: {fl_node_ids or [first_layer_node_id]}, 推理地址: {inference_url}")
+
+            return {
+                "success": success_count > 0,
+                "model_id": model_id,
+                "instance_id": instance_id,
+                "full_model_id": full_model_id,
+                "inference_url": inference_url,          # 首层节点推理地址（客户端可直连）
+                "first_layer_node_id": first_layer_node_id,  # 首层节点ID
+                "allocation": {
+                    "strategy": strategy,
+                    "total_layers": n_layers,
+                    "nodes_count": total,
+                    "allocations": allocation.allocations
+                },
+                "load_results": results,
+                "summary": {
+                    "success_nodes": success_count,
+                    "failed_nodes": total - success_count,
+                    "total_nodes": total
+                }
+            }
             
         except Exception as e:
             logger.error(f"❌ 加载模型失败: {e}")
@@ -2372,36 +2402,107 @@ class EXOClusterManager:
     async def rebalance_model(self, model_id: str) -> Dict:
         """
         重新平衡模型分布
-        
+
         当有新节点加入或节点资源变化时调用，
         会重新计算最优分配方案并迁移分片。
         """
-        # 先获取当前模型的分配信息
+        # 先获取当前模型的分配信息，同时提取重加载所需的元数据
         current_allocations = []
+        model_path = ""
+        n_layers = 0
         for node_id, node_info in self.nodes.items():
             for model in node_info.loaded_models:
-                if model.get("model_id") == model_id:
+                if model.get("model_id") == model_id or model.get("base_model_id") == model_id:
                     current_allocations.append({
                         "node_id": node_id,
                         **model
                     })
-        
+                    if not model_path:
+                        model_path = model.get("model_path", "")
+                    shard = model.get("shard", {})
+                    if shard.get("n_layers", 0) > n_layers:
+                        n_layers = shard.get("n_layers", 0)
+
         if not current_allocations:
             return {"success": False, "error": f"模型 {model_id} 未找到"}
-        
-        # 卸载旧分配，重新加载
-        unload_result = await self.unload_model_from_cluster(model_id)
-        
+
+        # 尝试从分配注册表补充模型路径与层数
+        registry_info = self._allocation_registry.get(model_id, {})
+        if not model_path:
+            model_path = registry_info.get("model_path", "")
+        if not n_layers:
+            n_layers = registry_info.get("n_layers", 0)
+
+        # 仍未拿到路径，则无法重新加载
+        if not model_path:
+            return {"success": False, "error": f"模型 {model_id} 缺少 model_path，无法重新加载"}
+        if not n_layers:
+            return {"success": False, "error": f"模型 {model_id} 缺少 n_layers，无法重新加载"}
+
+        # 卸载旧分配（包含所有实例）
+        unload_result = await self.unload_model_from_cluster(
+            model_id, unload_all_instances=True
+        )
+
+        # 即使卸载返回不完全成功，也尝试重新加载（旧分片可能已不存在）
         if not unload_result["success"]:
-            return {"success": False, "error": "卸载旧分配失败", "detail": unload_result}
-        
-        # TODO: 根据当前状态重新计算最优分配
-        # 这里可以复用 load_model_to_cluster 的逻辑
-        
+            logger.warning(f"⚠️ [Rebalance] 模型 {model_id} 卸载旧分配未完全成功，仍尝试重新加载")
+
+        # 重新加载，让智能分配器基于最新集群状态重新决策
+        load_result = await self.load_model_to_cluster(
+            model_id=model_id,
+            model_path=model_path,
+            n_layers=n_layers,
+            strategy="smart"
+        )
+
         return {
-            "success": True,
-            "message": f"模型 {model_id} 已准备重新平衡",
-            "unload_result": unload_result
+            "success": load_result.get("success", False),
+            "message": f"模型 {model_id} 已重新平衡",
+            "unload_result": unload_result,
+            "load_result": load_result
+        }
+
+    async def rebalance_loaded_models(self) -> Dict:
+        """
+        重新平衡当前已加载的所有模型
+
+        当有新节点加入时调用，将已加载模型按最新资源状态重新分配，
+        使新节点能够参与推理。
+        """
+        # 收集当前已加载的模型（按 base_model_id 去重）
+        loaded_model_ids = set()
+        for node_info in self.nodes.values():
+            for model in node_info.loaded_models:
+                model_id = model.get("model_id", "")
+                base_id = model.get("base_model_id") or (
+                    model_id.split("::")[0] if "::" in model_id else model_id
+                )
+                if base_id:
+                    loaded_model_ids.add(base_id)
+
+        if not loaded_model_ids:
+            return {"success": True, "message": "没有已加载的模型需要重新平衡", "rebalanced": []}
+
+        logger.info(f"🔄 [ClusterRebalance] 开始重新平衡 {len(loaded_model_ids)} 个模型: {loaded_model_ids}")
+
+        results = []
+        for model_id in sorted(loaded_model_ids):
+            try:
+                result = await self.rebalance_model(model_id)
+                results.append({"model_id": model_id, **result})
+                logger.info(f"🔄 [ClusterRebalance] {model_id}: success={result.get('success')}")
+            except Exception as e:
+                logger.error(f"❌ [ClusterRebalance] {model_id} 重新平衡失败: {e}", exc_info=True)
+                results.append({"model_id": model_id, "success": False, "error": str(e)})
+
+        success_count = sum(1 for r in results if r.get("success"))
+        return {
+            "success": success_count == len(results),
+            "total": len(results),
+            "success_count": success_count,
+            "failed_count": len(results) - success_count,
+            "results": results
         }
     
     async def shutdown(self):

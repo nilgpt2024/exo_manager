@@ -485,14 +485,24 @@ async def _proxy_to_node(
     start_time = time.time()
 
     # 🔍 [诊断] 打印代理目标 URL（排查 ConnectTimeout）
-    logger.info(f"🔍 [Proxy-DIAG] 目标节点: {node_id}, URL: {node_url}")
+    _ws_connected = bool(_ws_available and node_ws_manager and node_ws_manager.is_node_connected(node_id))
+    logger.info(
+        f"🔍 [Proxy-DIAG] "
+        f"model={model_id}, node={node_id}, "
+        f"ws_available={_ws_available}, ws_connected={_ws_connected}, "
+        f"node_url={node_url}, full_model_id={full_model_id}"
+    )
     _mgr = _get_manager()
     if _mgr and node_id in _mgr.nodes:
         _ni = _mgr.nodes[node_id]
-        logger.info(f"🔍 [Proxy-DIAG] 节点信息: address={_ni.address}, chatgpt_port={_ni.chatgpt_api_port}, chatgpt_url={_ni.chatgpt_url}")
+        logger.info(
+            f"🔍 [Proxy-DIAG] 节点信息: "
+            f"address={_ni.address}, chatgpt_port={_ni.chatgpt_api_port}, "
+            f"chatgpt_url={_ni.chatgpt_url}"
+        )
 
     total_tokens_used = 0
-    
+
     if _ws_available and node_ws_manager and node_ws_manager.is_node_connected(node_id):
         logger.info(f"[Proxy] 🌐 使用 WebSocket 隧道 → {node_id} req={request_id}")
 
@@ -563,7 +573,10 @@ async def _proxy_to_node(
             return
             
         except Exception as e:
-            logger.warning(f"[Proxy] WebSocket failed, fallback to HTTP: {e}")
+            logger.warning(
+                f"[Proxy] WebSocket 失败，准备降级 HTTP: "
+                f"node={node_id}, model={model_id}, error={type(e).__name__}: {e}"
+            )
             manager = _get_manager()
             if manager and hasattr(manager, 'load_balancer'):
                 manager.load_balancer.record_completion(
@@ -602,7 +615,7 @@ async def _proxy_to_node(
         _ni = _mgr_local.nodes[node_id]
         if _ni.address not in ("127.0.0.1", "localhost", "0.0.0.0"):
             _local_endpoint = f"http://127.0.0.1:{_ni.chatgpt_api_port}/v1/chat/completions"
-            logger.info(f"🔧 [Proxy] 检测到远程地址，准备 fallback: {node_endpoint} → {_local_endpoint}")
+            logger.debug(f"🔧 [Proxy] 检测到远程地址，已准备本地 fallback: {node_endpoint} → {_local_endpoint}")
 
     try:
         async with client.stream(

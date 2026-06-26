@@ -946,9 +946,26 @@ async def startup_event():
                 logger.warning(f"⚠️ 稳定性管理器连接失败（使用基础防抖）: {stability_err}")
 
             logger.info(f"🤖 自动分配触发器已启动 (将在30s后初始化首次分配)")
+
+            # ✅ 注册新节点加入回调：触发已加载模型重平衡 + 补充未加载模型
+            if manager:
+                async def _on_node_joined_callback(node_id: str):
+                    try:
+                        logger.info(f"🔄 [NodeJoinCallback] 节点 {node_id} 加入，开始重新分配模型...")
+                        rebalance_result = await manager.rebalance_loaded_models()
+                        logger.info(f"🔄 [NodeJoinCallback] 重平衡结果: {rebalance_result}")
+
+                        # 补充加载模型库中尚未加载的模型
+                        if _auto_trigger:
+                            await _auto_trigger.on_node_joined(node_id)
+                    except Exception as join_err:
+                        logger.error(f"❌ [NodeJoinCallback] 处理节点 {node_id} 加入事件失败: {join_err}", exc_info=True)
+
+                manager.set_node_joined_callback(_on_node_joined_callback)
+                logger.info(f"🔗 已注册新节点加入回调")
         except Exception as e:
             logger.error(f"⚠️ 自动分配触发器启动失败: {e}")
-    
+
     # 初始化 API Key 管理器，如果没有 key 则生成一个默认的
     key_manager = get_api_key_manager()
     stats = key_manager.get_stats()

@@ -470,12 +470,26 @@ class AutoAllocTrigger:
 
         return True, "所有节点均稳定"
 
+    def _is_model_loaded(self, model_id: str) -> bool:
+        """检查模型（按 base_model_id）是否已经在任意节点上加载"""
+        base_id = model_id.split("::")[0] if "::" in model_id else model_id
+        for node in self.manager.nodes.values():
+            for m in node.loaded_models:
+                loaded_id = m.get("model_id", "")
+                loaded_base = m.get("base_model_id") or (
+                    loaded_id.split("::")[0] if "::" in loaded_id else loaded_id
+                )
+                if loaded_base == base_id:
+                    return True
+        return False
+
     async def evaluate_and_allocate(
         self,
         reason: str,
         event_type: str = "manual",
         force: bool = False,
-        trigger_details: Optional[Dict[str, Any]] = None
+        trigger_details: Optional[Dict[str, Any]] = None,
+        skip_loaded_models: bool = False
     ) -> AllocationEvent:
         """
         评估并执行自动分配（主入口）
@@ -485,6 +499,7 @@ class AutoAllocTrigger:
             event_type: 事件类型
             force: 是否强制执行（跳过部分检查）
             trigger_details: 额外的触发详情
+            skip_loaded_models: 是否跳过已经加载过的模型（避免重复加载）
 
         Returns:
             AllocationEvent 完整的事件记录
@@ -518,6 +533,8 @@ class AutoAllocTrigger:
                     return event
 
             # Step 3: 更新基准状态（用于下次比较）
+            # 注意：先保存上一次的节点数，供 pending 重试逻辑使用
+            previous_node_count = self._last_node_count
             self._last_node_count = current_state["online_node_count"]
             self._last_online_memory_mb = current_state["total_memory_mb"]
             self._last_evaluated_models = current_state["loaded_models_count"]
@@ -532,8 +549,8 @@ class AutoAllocTrigger:
 
             # Step 4.5: 新节点加入时，重试待分配的 pending 模型
             retried_models = []
-            if self._pending_models and current_state["online_node_count"] > self._last_node_count:
-                logger.info(f"[AutoAllocTrigger] 🔄 检测到新节点加入 ({self._last_node_count} → {current_state['online_node_count']}), "
+            if self._pending_models and current_state["online_node_count"] > previous_node_count:
+                logger.info(f"[AutoAllocTrigger] 🔄 检测到新节点加入 ({previous_node_count} → {current_state['online_node_count']}), "
                            f"尝试重试 {len(self._pending_models)} 个待分配模型...")
                 for pending in list(self._pending_models):  # copy to allow modification during iteration
                     try:
@@ -703,6 +720,11 @@ class AutoAllocTrigger:
                             if not spec:
                                 logger.warning(f"[AutoAllocTrigger] ⚠️ 未找到模型规格: {model_id}")
                                 failed_models.append({"model": model_id, "reason": "未知模型"})
+                                continue
+
+                            # 如果配置为跳过已加载模型，则检查是否已加载
+                            if skip_loaded_models and self._is_model_loaded(model_id):
+                                logger.info(f"[AutoAllocTrigger] ⏭️ 模型 {model_id} 已加载，跳过重复加载")
                                 continue
 
                             # 调用集群管理器的 load_model_to_cluster 方法
@@ -994,6 +1016,22 @@ class AutoAllocTrigger:
 
             await asyncio.sleep(check_interval)
 
+    async def on_node_joined(self, node_id: str):
+        """
+        新节点加入事件处理
+
+        等待节点状态稳定后，触发一次强制的自动分配，
+        并跳过已经加载的模型以避免重复加载。
+        """
+        logger.info(f"[AutoAllocTrigger] 🆕 收到新节点加入事件: {node_id}")
+        # 短暂等待，让节点有机会上报设备信息
+        await asyncio.sleep(2)
+        await self.evaluate_and_allocate(
+            reason=f"新节点 {node_id} 加入",
+            event_type="node_event",
+            force=True,
+            skip_loaded_models=True
+        )
 
     async def manual_trigger(self, reason: str = "用户手动触发", force: bool = True) -> AllocationEvent:
         """
