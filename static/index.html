@@ -2468,7 +2468,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                 </div>
                                 
                                 <!-- 模型下拉列表 -->
-                                <select id="selectModelId" required 
+                                <select id="selectModelId"
                                         onchange="onModelSelected(this.value)"
                                         size="6"
                                         style="width:100%; padding:0.5rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.85rem; min-height:150px;">
@@ -2494,10 +2494,27 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                 </div>
                             </div>
                             
+                            <!-- 加载方式选择 (新增) -->
+                            <div class="form-group" style="margin-top:0.75rem; padding:1rem; background:linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%); border-radius:10px; border:1px solid #c084fc33;">
+                                <label style="font-weight:700; color:#6b21a8; margin-bottom:0.5rem; display:block;">
+                                    <i class="fas fa-cogs"></i> 加载方式
+                                </label>
+                                <select id="inputLoadMode" onchange="onLoadModeChange(this.value)"
+                                        style="width:100%; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.9rem; background:white;">
+                                    <option value="smart" selected>Smart 智能（单节点优先）</option>
+                                    <option value="full">Full 全量利用（分片到所有 GPU）</option>
+                                    <option value="ha">HA 高可用（自动主备分配）</option>
+                                </select>
+                                <small id="loadModeHint" style="color:#7e22ce; display:block; margin-top:0.4rem;">
+                                    <i class="fas fa-info-circle"></i> 智能策略：模型完整加载到单个节点，延迟最低。
+                                </small>
+                            </div>
+                            
                             <!-- 隐藏字段：实际提交的值 -->
                             <input type="hidden" id="inputModelId" />
                             <input type="hidden" id="inputModelPath" />
                             
+                            <div id="smartFullFields">
                             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-top:0.75rem;">
                                 <div class="form-group">
                                     <label><i class="fas fa-layer-group"></i> 总层数</label>
@@ -2614,6 +2631,17 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                         <div id="instancesPreviewList" style="margin-top:0.5rem; font-family:monospace; font-size:0.85rem; color:#78350f;"></div>
                                     </div>
                                 </div>
+                            </div>
+                            </div>
+                            
+                            <!-- HA 模式说明 (新增) -->
+                            <div id="haModeInfo" style="display:none; margin-top:1rem; padding:1rem; background:linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius:10px; border:1px solid #fbbf2444;">
+                                <strong style="color:#92400e; font-size:0.92rem; display:block; margin-bottom:0.5rem;">
+                                    <i class="fas fa-shield-alt"></i> HA 高可用模式
+                                </strong>
+                                <p style="color:#78350f; font-size:0.85rem; margin-bottom:0.75rem; line-height:1.5;">
+                                    启用后将为模型库中所有可用模型自动生成高可用分配方案（主备/双活），并自动加载到多个节点。当前模型选择、策略、实例数等设置将被忽略。
+                                </p>
                             </div>
                             
                             <button type="submit" id="btnLoadModel" 
@@ -2761,6 +2789,9 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             
             // 初始化为多实例模式（移除单实例选项后）
             onInstanceModeChange('multi');
+            
+            // 初始化加载方式
+            onLoadModeChange('smart');
         });
         
         // ==================== WebSocket Connection ====================
@@ -3001,7 +3032,8 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 refreshTopology(),
                 refreshModelsList(),
                 updateTargetNodeOptions(),
-                loadAvailableModels()
+                loadAvailableModels(),
+                loadModelLibraryDetails()
             ]);
         }
         
@@ -3594,6 +3626,23 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         // 可用模型缓存
         let availableModels = [];
         
+        // 模型库详情缓存（含 size_gb / layer_memory_mb）
+        let modelLibraryDetails = {};
+        
+        async function loadModelLibraryDetails() {
+            try {
+                const result = await apiCall('/api/auto-allocate/models/library');
+                if (result && result.success && result.data && result.data.models) {
+                    result.data.models.forEach(m => {
+                        modelLibraryDetails[m.id] = m;
+                    });
+                    logOperation('[LIBRARY] 已加载模型库详情', 'info');
+                }
+            } catch (e) {
+                console.error('加载模型库详情失败:', e);
+            }
+        }
+        
         async function loadAvailableModels() {
             try {
                 const result = await apiCall('/api/models/available');
@@ -3945,7 +3994,14 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         
         function updateLoadButtonText() {
             const btnLoad = document.getElementById('btnLoadModel');
+            const loadMode = document.getElementById('inputLoadMode').value;
             const selectedName = document.getElementById('selectedModelName').textContent;
+            
+            if (loadMode === 'ha') {
+                btnLoad.disabled = false;
+                btnLoad.innerHTML = '<i class="fas fa-shield-alt"></i> 启动 HA 自动分配';
+                return;
+            }
             
             if (!selectedName || selectedName === '未选择') {
                 btnLoad.disabled = true;
@@ -3955,9 +4011,39 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             
             btnLoad.disabled = false;
             
+            if (loadMode === 'full') {
+                btnLoad.innerHTML = `<i class="fas fa-expand-arrows-alt"></i> 全量加载 ${selectedName} 到所有 GPU`;
+                return;
+            }
+            
             // 强制使用多实例模式
             const count = parseInt(document.getElementById('inputInstanceCount').value) || 2;
             btnLoad.innerHTML = `<i class="fas fa-clone"></i> 加载 ${count} 个 ${selectedName} 实例`;
+        }
+        
+        function onLoadModeChange(mode) {
+            const smartFullFields = document.getElementById('smartFullFields');
+            const haModeInfo = document.getElementById('haModeInfo');
+            const loadModeHint = document.getElementById('loadModeHint');
+            const strategySelect = document.getElementById('inputStrategy');
+            
+            if (mode === 'ha') {
+                smartFullFields.style.display = 'none';
+                haModeInfo.style.display = 'block';
+                loadModeHint.innerHTML = '<i class="fas fa-info-circle"></i> HA 模式：自动生成主备/双活方案，分散到多节点。';
+            } else if (mode === 'full') {
+                smartFullFields.style.display = 'block';
+                haModeInfo.style.display = 'none';
+                strategySelect.value = 'smart';
+                loadModeHint.innerHTML = '<i class="fas fa-info-circle"></i> Full 模式：自动创建尽可能多的模型实例，占满所有 GPU 显存空间。';
+            } else {
+                smartFullFields.style.display = 'block';
+                haModeInfo.style.display = 'none';
+                strategySelect.value = 'smart';
+                loadModeHint.innerHTML = '<i class="fas fa-info-circle"></i> Smart 模式：模型完整加载到单个节点，延迟最低。';
+            }
+            
+            updateLoadButtonText();
         }
         
 
@@ -4352,6 +4438,54 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         async function handleLoadModel(event) {
             event.preventDefault();
             
+            const loadMode = document.getElementById('inputLoadMode').value;
+            
+            // ✨ 显示加载中的 UI 状态
+            const btnLoad = document.getElementById('btnLoadModel');
+            btnLoad.disabled = true;
+            btnLoad.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 处理中...';
+            
+            // ========== HA 高可用模式 ==========
+            if (loadMode === 'ha') {
+                logOperation('[HA] 正在配置并启动高可用自动分配...', 'info');
+                showToast('🛡️ 正在启动 HA 高可用自动分配...', 'info', 3000);
+                
+                try {
+                    // 1) 设置自动触发器为 HA 模式
+                    const cfgResult = await apiCall('/api/auto-trigger/configure', {
+                        method: 'POST',
+                        body: JSON.stringify({ strategy: 'active_passive' })
+                    });
+                    
+                    if (!cfgResult || !cfgResult.success) {
+                        throw new Error(cfgResult?.error || '配置 HA 模式失败');
+                    }
+                    
+                    // 2) 触发自动分配
+                    const triggerResult = await apiCall('/api/auto-trigger/trigger', {
+                        method: 'POST',
+                        body: JSON.stringify({ reason: 'manual_ha_from_ui', force: true })
+                    });
+                    
+                    if (triggerResult && triggerResult.success) {
+                        showToast('✅ HA 自动分配已启动，请查看集群模型分布', 'success', 5000);
+                        logOperation('[HA] 自动分配触发成功', 'success');
+                    } else {
+                        throw new Error(triggerResult?.error || '触发自动分配失败');
+                    }
+                } catch (e) {
+                    logOperation(`[HA ERROR] ${e.message}`, 'error');
+                    showToast(`HA 模式失败: ${e.message}`, 'error');
+                }
+                
+                if (btnLoad) {
+                    btnLoad.disabled = false;
+                    updateLoadButtonText();
+                }
+                return;
+            }
+            
+            // ========== Smart / Full 模式 ==========
             const modelId = document.getElementById('inputModelId').value.trim();
             const modelPath = document.getElementById('inputModelPath').value.trim();
             const nLayers = parseInt(document.getElementById('inputNLayers').value);
@@ -4362,24 +4496,53 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             
             if (!modelId) {
                 showToast('请先选择要加载的模型', 'warning');
+                btnLoad.disabled = false;
+                updateLoadButtonText();
                 return;
             }
             
             // ✨ 获取实例数量（后端会自动分配唯一ID）
-            const instanceCount = parseInt(document.getElementById('inputInstanceCount').value) || 1;
+            let instanceCount = parseInt(document.getElementById('inputInstanceCount').value) || 1;
             
-            logOperation(`[LOAD] 正在加载模型: ${modelId} (请求 ${instanceCount} 个实例)`, 'info');
+            if (loadMode === 'full') {
+                // Full 模式：创建尽可能多的实例，占满所有 GPU 显存空间
+                try {
+                    const nodesResult = await apiCall('/api/nodes');
+                    const onlineNodes = (nodesResult?.data || []).filter(n => n.status === 'online' || n.status === 'connecting');
+                    
+                    // 优先使用模型库里的 size_gb 估算模型大小
+                    const libModel = modelLibraryDetails[modelId] || {};
+                    const modelSizeMb = libModel.size_gb ? libModel.size_gb * 1024 : (nLayers * 100);
+                    
+                    if (modelSizeMb <= 0) {
+                        throw new Error('无法估算模型大小');
+                    }
+                    
+                    // 计算所有在线节点剩余空间还能放多少个该模型实例
+                    let totalInstances = 0;
+                    onlineNodes.forEach(node => {
+                        const memDetail = node.device_info?.memory_detail || {};
+                        const freeMb = memDetail.free || 0;
+                        if (freeMb > 0) {
+                            totalInstances += Math.max(0, Math.floor(freeMb / modelSizeMb));
+                        }
+                    });
+                    
+                    instanceCount = Math.max(1, totalInstances);
+                    logOperation(`[FULL] 模型 ${modelId} 约 ${(modelSizeMb/1024).toFixed(1)}GB，预计可在所有节点创建 ${instanceCount} 个实例`, 'info');
+                } catch (e) {
+                    logOperation(`[FULL ERROR] 计算实例数失败: ${e.message}`, 'error');
+                    showToast(`Full 模式失败: ${e.message}`, 'error');
+                    btnLoad.disabled = false;
+                    updateLoadButtonText();
+                    return;
+                }
+            }
             
-            // ✨ 显示加载中的 UI 状态
-            const btnLoad = document.getElementById('btnLoadModel');
-            btnLoad.disabled = true;
-            btnLoad.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
-            
-            // ✨ 显示进度提示（强调后端自动管理ID）
-            showToast(`📦 正在请求创建 ${instanceCount} 个 ${modelId} 实例 (后端自动分配ID)...`, 'info', 3000);
+            logOperation(`[LOAD] 正在加载模型: ${modelId} (方式=${loadMode}, 策略=${strategy}, 实例=${instanceCount})`, 'info');
+            showToast(`📦 正在请求 ${loadMode === 'full' ? '全量加载' : '创建'} ${modelId} (${instanceCount} 个实例)...`, 'info', 3000);
             
             try {
-                // ✅ 核心改进：只调用一次API，传入数量，完全不传instance_id
                 const result = await apiCall('/api/pool/load-model', {
                     method: 'POST',
                     body: JSON.stringify({
@@ -4388,7 +4551,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                         n_layers: nLayers,
                         strategy: strategy,
                         target_nodes: targetNodes.length > 0 ? targetNodes : null,
-                        instance_count: instanceCount  // ✅ 只传数量，后端全权负责
+                        instance_count: instanceCount
                     })
                 });
                 
@@ -4397,7 +4560,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     const summary = result.summary || {};
                     const instances = result.instances || [];
                     
-                    // 记录每个实例的结果
                     instances.forEach((inst, idx) => {
                         if (inst.success) {
                             logOperation(`  ✓ 实例 ${inst.instance_id || ('#' + (idx+1))} 创建成功 (${inst.full_model_id})`, 'success');
