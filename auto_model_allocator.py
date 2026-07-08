@@ -54,15 +54,28 @@ class ModelSpec:
     category: str = "general"   # 类别: general/code/math/reasoning
     priority: float = 1.0       # 优先级权重
 
+    # 运行时开销系数：权重之外还需预留 KV Cache / 激活值 / CUDA 碎片等空间
+    RUNTIME_OVERHEAD_RATIO: float = 1.30
+
     @property
     def total_memory_mb(self) -> float:
-        """总显存需求(MB)"""
+        """总显存需求(MB) - 仅权重估算"""
         return self.total_layers * self.layer_memory_mb
+
+    @property
+    def runtime_memory_mb(self) -> float:
+        """运行时总显存需求(MB) - 含 KV Cache / 激活值 / 碎片开销"""
+        return self.total_memory_mb * self.RUNTIME_OVERHEAD_RATIO
 
     @property
     def total_memory_gb(self) -> float:
         """总显存需求(GB)"""
         return self.total_memory_mb / 1024
+
+    @property
+    def runtime_memory_gb(self) -> float:
+        """运行时总显存需求(GB)"""
+        return self.runtime_memory_mb / 1024
 
 
 # 模型库配置文件路径
@@ -265,11 +278,27 @@ class AutoModelAllocator:
             if mem_detail and mem_detail.get("used", 0) > 0:
                 used_mem = mem_detail["used"]
             else:
-                # 基于已加载模型估算
+                # 基于已加载模型估算，使用模型库中配置的每层显存
                 for model in node_info.loaded_models:
                     shard = model.get("shard", {})
                     n_layers = shard.get("end_layer", 0) - shard.get("start_layer", 0) + 1
-                    used_mem += n_layers * 100  # 粗略估算
+
+                    model_id = model.get("model_id", "")
+                    base_id = model.get("base_model_id") or (
+                        model_id.split("::")[0] if "::" in model_id else model_id
+                    )
+                    spec = self.model_library.get(base_id)
+                    if not spec:
+                        # 尝试用 HF repo ID 反向查找
+                        for key, lib_spec in self.model_library.items():
+                            if lib_spec.model_id == base_id:
+                                spec = lib_spec
+                                break
+                    if spec:
+                        layer_mem = spec.runtime_memory_mb / max(spec.total_layers, 1)
+                    else:
+                        layer_mem = 100.0 * 1.30
+                    used_mem += n_layers * layer_mem
 
             free_mem = max(0, total_mem - used_mem)
 
@@ -469,7 +498,7 @@ class AutoModelAllocator:
         for candidate in candidates:
             model_id = candidate.model_id  # 这是 HF repo ID
             short_model_id = _get_short_name(candidate)  # 转换为短名
-            model_mem = candidate.total_memory_mb
+            model_mem = candidate.runtime_memory_mb
             total_layers = candidate.total_layers
 
             logger.debug(f"[AutoAllocator] 尝试分配 {candidate.pretty_name}: "
@@ -531,7 +560,7 @@ class AutoModelAllocator:
         2. 在这些节点中选择利用率最低的（负载均衡）
         3. 如果没有单个节点能容纳，返回None
         """
-        model_mem = candidate.total_memory_mb
+        model_mem = candidate.runtime_memory_mb
         best_node = None
         best_waste = float('inf')
 
@@ -632,7 +661,7 @@ class AutoModelAllocator:
         node_states: Dict[str, float]
     ) -> str:
         """获取无法分配的原因"""
-        model_mem = candidate.total_memory_mb
+        model_mem = candidate.runtime_memory_mb
         total_available = sum(node_states.values())
         max_single = max(node_states.values()) if node_states else 0
 

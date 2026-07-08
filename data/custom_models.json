@@ -1,98 +1,111 @@
 {
-    "model_cards": {
-        "qwen-3-0.6b": {
-            "layers": 28,
-            "repo": {
-                "PyTorchQwen3InferenceEngine": "Qwen/Qwen3-0.6B"
-            },
-            "allocation": {
-                "layer_memory_mb": 100,
-                "param_count": 0.6,
-                "category": "general",
-                "priority": 0.8
-            }
-        },
-        "qwen-3-4b": {
-            "layers": 36,
-            "repo": {
-                "PyTorchQwen3InferenceEngine": "Qwen/Qwen3-4B"
-            },
-            "allocation": {
-                "layer_memory_mb": 215,
-                "param_count": 4,
-                "category": "general",
-                "priority": 1.0
-            }
-        },
-        "qwen-3-vl-2b": {
-            "layers": 28,
-            "repo": {
-                "PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-2B-Instruct"
-            },
-            "allocation": {
-                "layer_memory_mb": 240,
-                "param_count": 2,
-                "category": "vision",
-                "priority": 0.9
-            }
-        },
-        "qwen-3-vl-4b": {
-            "layers": 36,
-            "repo": {
-                "PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-4B-Instruct"
-            },
-            "allocation": {
-                "layer_memory_mb": 380,
-                "param_count": 4,
-                "category": "vision",
-                "priority": 1.0
-            }
-        },
-        "fara-7b": {
-            "layers": 28,
-            "repo": {
-                "PyTorchQwen2_5VlInferenceEngine": "microsoft/Fara-7B-INT8"
-            },
-            "allocation": {
-                "layer_memory_mb": 560,
-                "param_count": 7,
-                "category": "agent",
-                "priority": 0.7
-            }
-        },
-        "qwen-2.5-vl-3b": {
-            "layers": 36,
-            "repo": {
-                "PyTorchQwen2_5VlInferenceEngine": "Qwen/Qwen2.5-VL-3B-Instruct"
-            },
-            "allocation": {
-                "layer_memory_mb": 330,
-                "param_count": 3,
-                "category": "vision",
-                "priority": 0.9
-            }
-        },
-        "llama-3.2-1b": {
-            "layers": 16,
-            "repo": {
-                "PyTorchLlama3InferenceEngine": "unsloth/Llama-3.2-1B-Instruct"
-            },
-            "allocation": {
-                "layer_memory_mb": 250,
-                "param_count": 1,
-                "category": "general",
-                "priority": 0.7
-            }
-        }
+  "model_cards": {
+    "qwen-3-0.6b": {
+      "layers": 28,
+      "repo": {
+        "PyTorchQwen3InferenceEngine": "Qwen/Qwen3-0.6B"
+      },
+      "allocation": {
+        "layer_memory_mb": 100,
+        "param_count": 0.6,
+        "category": "general",
+        "priority": 0.8
+      }
     },
-    "pretty_names": {
-        "qwen-3-0.6b": "Qwen 3 0.6B",
-        "qwen-3-4b": "Qwen 3 4B",
-        "qwen-3-vl-2b": "Qwen 3 VL 2B",
-        "qwen-3-vl-4b": "Qwen 3 VL 4B",
-        "qwen-3-tts-1.7b": "Qwen 3 TTS 1.7B (VoiceDesign)",
-        "fara-7b": "Fara 7B (Microsoft Computer Use Agent)",
-        "qwen-2.5-vl-3b": "Qwen 2.5 VL 3B",
-        "llama-3.2-1b": "Llama 3.2 1B"
+    "qwen-3-4b": {
+      "layers": 36,
+      "repo": {
+        "PyTorchQwen3InferenceEngine": "Qwen/Qwen3-4B"
+      },
+      "allocation": {
+        "layer_memory_mb": 215,
+        "param_count": 4,
+        "category": "general",
+        "priority": 1.0
+      }
+    },
+    "qwen-3-vl-2b": {
+      "layers": 28,
+      "repo": {
+        "PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-2B-Instruct"
+      },
+      "allocation": {
+        "layer_memory_mb": 240,
+        "param_count": 2.0,
+        "category": "vision",
+        "priority": 0.8
+      }
+    },
+    "qwen-3-vl-4b": {
+      "layers": 36,
+      "repo": {
+        "PyTorchQwen3VLInferenceEngine": "Qwen/Qwen3-VL-4B-Instruct"
+      },
+      "allocation": {
+        "layer_memory_mb": 380,
+        "param_count": 4,
+        "category": "vision",
+        "priority": 1.0
+      }
+    },
+    "fara-7b": {
+      "layers": 28,
+      "repo": {
+        "PyTorchQwen2_5VlInferenceEngine": "microsoft/Fara-7B-INT8"
+      },
+      "allocation": {
+        "layer_memory_mb": 560,
+        "param_count": 7.0,
+        "category": "agent",
+        "priority": 1.0
+      }
+    },
+    "qwen-2.5-vl-3b": {
+      "layers": 36,
+      "repo": {
+        "PyTorchQwen2_5VlInferenceEngine": "Qwen/Qwen2.5-VL-3B-Instruct"
+      },
+      "allocation": {
+        "layer_memory_mb": 330,
+        "param_count": 3,
+        "category": "vision",
+        "priority": 0.9
+      }
+    },
+    "llama-3.2-1b": {
+      "layers": 16,
+      "repo": {
+        "PyTorchLlama3InferenceEngine": "unsloth/Llama-3.2-1B-Instruct"
+      },
+      "allocation": {
+        "layer_memory_mb": 250,
+        "param_count": 1.0,
+        "category": "general",
+        "priority": 0.6
+      }
+    },
+    "nv-community/LocateAnything-3B": {
+      "layers": 0,
+      "repo": {
+        "PyTorchQwen2_5VlInferenceEngine": "nv-community/LocateAnything-3B"
+      },
+      "allocation": {
+        "layer_memory_mb": 0,
+        "param_count": 3.0,
+        "category": "vision",
+        "priority": 1.0
+      }
     }
+  },
+  "pretty_names": {
+    "qwen-3-0.6b": "Qwen 3 0.6B",
+    "qwen-3-4b": "Qwen 3 4B",
+    "qwen-3-vl-2b": "Qwen 3 VL 2B",
+    "qwen-3-vl-4b": "Qwen 3 VL 4B",
+    "qwen-3-tts-1.7b": "Qwen 3 TTS 1.7B (VoiceDesign)",
+    "fara-7b": "Fara 7B (Microsoft Computer Use Agent)",
+    "qwen-2.5-vl-3b": "Qwen 2.5 VL 3B",
+    "llama-3.2-1b": "Llama 3.2 1B",
+    "nv-community/LocateAnything-3B": "LocateAnything-3B"
+  }
 }

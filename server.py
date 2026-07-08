@@ -200,9 +200,6 @@ def get_auto_trigger() -> AutoAllocTrigger:
 
 logger = logging.getLogger(__name__)
 
-# 导入系统日志收集器
-from sys_logger import sys_log
-
 app = FastAPI(
     title="EXO Cluster Manager API",
     description="分布式AI模型推理集群管理系统",
@@ -2139,16 +2136,17 @@ async def get_available_models():
 async def list_custom_models():
     """获取所有自定义模型配置"""
     models_list = []
-    
+
     for model_id, config in custom_model_cards.items():
         models_list.append({
             "model_id": model_id,
             "pretty_name": custom_pretty_names.get(model_id, model_id),
             "layers": config.get("layers", 0),
             "repo": config.get("repo", {}),
-            "engines": list(config.get("repo", {}).keys())
+            "engines": list(config.get("repo", {}).keys()),
+            "allocation": config.get("allocation", {})
         })
-    
+
     return {
         "success": True,
         "data": {
@@ -2162,36 +2160,43 @@ async def add_custom_model(request: Request):
     """添加自定义模型"""
     try:
         data = await request.json()
-        
+
         model_id = data.get("model_id", "").strip()
         pretty_name = data.get("pretty_name", "").strip()
         layers = int(data.get("layers", 0))
         repo = data.get("repo", "")
         engine_type = data.get("engine_type", "PyTorchLlama3InferenceEngine")
-        
+
         if not model_id:
             return {"success": False, "error": "模型ID不能为空"}
-        
+
         if not repo:
             return {"success": False, "error": "模型仓库路径不能为空"}
-        
+
         if model_id in custom_model_cards:
             return {"success": False, "error": f"模型 {model_id} 已存在，请使用更新接口"}
-        
+
+        allocation = data.get("allocation", {})
         custom_model_cards[model_id] = {
             "layers": layers,
-            "repo": {engine_type: repo}
+            "repo": {engine_type: repo},
+            "allocation": {
+                "layer_memory_mb": int(allocation.get("layer_memory_mb", 0)) if allocation.get("layer_memory_mb") else 0,
+                "param_count": float(allocation.get("param_count", 0)) if allocation.get("param_count") else 0,
+                "category": (allocation.get("category", "") or "").strip() or "general",
+                "priority": float(allocation.get("priority", 0.8)) if allocation.get("priority") is not None else 0.8
+            }
         }
-        
+
         if pretty_name:
             custom_pretty_names[model_id] = pretty_name
         else:
             custom_pretty_names[model_id] = model_id
-        
+
         save_custom_models()
-        
+
         logger.info(f"[Models] 添加自定义模型: {model_id} ({pretty_name or model_id})")
-        
+
         return {
             "success": True,
             "message": f"模型 {model_id} 添加成功",
@@ -2199,10 +2204,11 @@ async def add_custom_model(request: Request):
                 "model_id": model_id,
                 "pretty_name": custom_pretty_names[model_id],
                 "layers": layers,
-                "repo": repo
+                "repo": repo,
+                "allocation": custom_model_cards[model_id]["allocation"]
             }
         }
-        
+
     except Exception as e:
         logger.error(f"[Models] 添加自定义模型失败: {e}")
         return {"success": False, "error": str(e)}
@@ -2212,30 +2218,39 @@ async def update_custom_model(model_id: str, request: Request):
     """更新自定义模型"""
     try:
         data = await request.json()
-        
+
         if model_id not in custom_model_cards:
             return {"success": False, "error": f"模型 {model_id} 不存在"}
-        
+
         config = custom_model_cards[model_id]
-        
+
         if "pretty_name" in data and data["pretty_name"].strip():
             custom_pretty_names[model_id] = data["pretty_name"].strip()
-        
+
         if "layers" in data:
             config["layers"] = int(data["layers"])
-        
+
         if "repo" in data and data["repo"].strip():
             engine_type = data.get("engine_type", list(config.get("repo", {}).keys())[0] if config.get("repo") else "PyTorchLlama3InferenceEngine")
             config["repo"] = {engine_type: data["repo"].strip()}
-        
+
         if "engine_type" in data and "repo" in config:
             old_repo = list(config["repo"].values())[0] if config["repo"] else ""
             config["repo"] = {data["engine_type"]: old_repo}
-        
+
+        if "allocation" in data and isinstance(data["allocation"], dict):
+            allocation = data["allocation"]
+            config["allocation"] = {
+                "layer_memory_mb": int(allocation.get("layer_memory_mb", 0)) if allocation.get("layer_memory_mb") else 0,
+                "param_count": float(allocation.get("param_count", 0)) if allocation.get("param_count") else 0,
+                "category": (allocation.get("category", "") or "").strip() or "general",
+                "priority": float(allocation.get("priority", 0.8)) if allocation.get("priority") is not None else 0.8
+            }
+
         save_custom_models()
-        
+
         logger.info(f"[Models] 更新自定义模型: {model_id}")
-        
+
         return {
             "success": True,
             "message": f"模型 {model_id} 更新成功",
@@ -2245,7 +2260,7 @@ async def update_custom_model(model_id: str, request: Request):
                 **config
             }
         }
-        
+
     except Exception as e:
         logger.error(f"[Models] 更新自定义模型失败: {e}")
         return {"success": False, "error": str(e)}
@@ -3330,7 +3345,8 @@ def _get_available_models_for_inference() -> List[Dict]:
 async def pool_preview_allocation(
     model_id: str,
     n_layers: int = 32,
-    strategy: str = "smart"  # 默认智能策略
+    strategy: str = "smart",  # 默认智能策略
+    simulated_nodes: str = None  # JSON 数组，如 [{"memory_gb": 16}, {"memory_gb": 16}]
 ):
     """
     预览模型分配方案（不实际加载）
@@ -3339,6 +3355,8 @@ async def pool_preview_allocation(
         model_id: 模型ID
         n_layers: 总层数（默认32）
         strategy: 分配策略
+        simulated_nodes: 可选的模拟节点列表，JSON 字符串，每个元素包含 memory_gb。
+                         提供时优先使用模拟节点进行分配预览，不再依赖当前在线节点。
     """
     if not manager:
         raise HTTPException(status_code=503, detail="服务未初始化")
@@ -3347,10 +3365,21 @@ async def pool_preview_allocation(
         from gpu_pool_integration import GPUPoolIntegration
         pool = GPUPoolIntegration(manager)
         
+        nodes_spec = None
+        if simulated_nodes:
+            import json
+            try:
+                parsed = json.loads(simulated_nodes)
+                if isinstance(parsed, list) and parsed:
+                    nodes_spec = parsed
+            except json.JSONDecodeError:
+                return {"success": False, "error": "simulated_nodes 参数格式错误，应为 JSON 数组"}
+        
         allocation = await pool.preview_allocation(
             model_id=model_id,
             total_layers=n_layers,
-            strategy=strategy
+            strategy=strategy,
+            simulated_nodes=nodes_spec
         )
         
         return {
@@ -3429,35 +3458,6 @@ async def get_fault_recovery_history(limit: int = 10):
         "total": len(history)
     }
 
-
-
-# ==================== 系统日志 API ====================
-
-@app.get("/api/logs", response_model=Dict)
-async def get_system_logs(
-    level: str = None,
-    category: str = None,
-    limit: int = 100,
-    offset: int = 0
-):
-    """
-    获取系统日志
-
-    Query Params:
-        level: 过滤级别 (info/warning/error/success)
-        category: 过滤分类 (allocation/fault-recovery/node/model/...)
-        limit: 返回条数上限（默认100）
-        offset: 分页偏移量
-    """
-    result = sys_log.get_logs(level=level, category=category, limit=limit, offset=offset)
-    return {"success": True, "data": result}
-
-
-@app.post("/api/logs/clear", response_model=Dict)
-async def clear_system_logs():
-    """清空系统日志"""
-    sys_log.clear()
-    return {"success": True, "message": "日志已清空"}
 
 
 # ==================== P2P 拓扑管理 API ====================
@@ -5095,7 +5095,7 @@ async def execute_allocation_plan(request: Dict[str, Any] = Body(...)):
 
 
 @app.get("/api/auto-allocate/models/library", response_model=Dict)
-async def get_model_library():
+async def list_auto_allocate_model_library():
     """
     获取可用模型库列表
 
@@ -5148,7 +5148,7 @@ async def get_model_library():
 
 
 @app.post("/api/auto-allocate/models/custom", response_model=Dict)
-async def add_custom_model(request: Dict[str, Any] = Body(...)):
+async def add_auto_allocate_custom_model(request: Dict[str, Any] = Body(...)):
     """
     添加自定义模型到库中
 

@@ -364,10 +364,17 @@
             border-radius: 18px;
             padding: 0.75rem 1rem;
             display: flex;
-            align-items: flex-end;
-            gap: 0.75rem;
+            flex-direction: column;
+            gap: 0.5rem;
             box-shadow: var(--shadow-md);
             transition: border-color 0.2s;
+        }
+
+        .chat-input-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 0.75rem;
+            width: 100%;
         }
 
         .chat-input-box:focus-within { border-color: var(--user-primary); }
@@ -403,6 +410,65 @@
 
         .send-btn:hover:not(:disabled) { transform: scale(1.05); }
         .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .upload-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 12px;
+            border: none;
+            background: #f1f5f9;
+            color: #64748b;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.95rem;
+            flex-shrink: 0;
+            transition: all 0.2s;
+        }
+        .upload-btn:hover { background: #e2e8f0; color: var(--user-primary); }
+        .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .image-preview-container {
+            display: none;
+            position: relative;
+            align-self: flex-start;
+            margin-bottom: 0.5rem;
+        }
+        .image-preview-container img {
+            max-width: 120px;
+            max-height: 90px;
+            border-radius: 10px;
+            object-fit: contain;
+            border: 1px solid var(--user-border);
+        }
+        .image-preview-remove {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #ef4444;
+            color: white;
+            border: 2px solid white;
+            font-size: 0.7rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+
+        .msg-image {
+            max-width: 220px;
+            max-height: 180px;
+            border-radius: 10px;
+            object-fit: contain;
+            display: block;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+        }
 
         .input-hint {
             text-align: center;
@@ -1615,17 +1681,27 @@
 
         <div class="chat-input-wrapper">
             <div class="chat-input-box">
-                <textarea
-                    class="chat-input"
-                    id="inputMessage"
-                    placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
-                    rows="1"
-                    onkeydown="handleKeyDown(event)"
-                    oninput="autoResize(this)"
-                ></textarea>
-                <button class="send-btn" id="btnSend" onclick="sendMessage()">
-                    <i class="fas fa-arrow-up"></i>
-                </button>
+                <div class="image-preview-container" id="imagePreviewContainer">
+                    <img id="imagePreview" src="" alt="预览">
+                    <button class="image-preview-remove" onclick="clearSelectedImage()" title="移除图片">×</button>
+                </div>
+                <div class="chat-input-row">
+                    <button class="upload-btn" id="btnUpload" onclick="document.getElementById('chatImageInput').click()" title="上传图片">
+                        <i class="fas fa-image"></i>
+                    </button>
+                    <input type="file" id="chatImageInput" accept="image/*" style="display:none" onchange="handleImageSelect(event)">
+                    <textarea
+                        class="chat-input"
+                        id="inputMessage"
+                        placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                        oninput="autoResize(this)"
+                    ></textarea>
+                    <button class="send-btn" id="btnSend" onclick="sendMessage()">
+                        <i class="fas fa-arrow-up"></i>
+                    </button>
+                </div>
             </div>
             <div class="input-hint">AI 回复可能存在误差，请以实际结果为准 · 本次消耗: <strong id="tokenCost">0</strong> tokens</div>
         </div>
@@ -2004,6 +2080,8 @@ let selectedModel = '';
 let isStreaming = false;
 const chatHistory = [];  // 对话上下文记录
 let _msgIdCounter = 0;   // 消息 ID 计数器，避免 Date.now() 冲突
+let selectedImageBase64 = null;  // 已选图片 base64 数据
+let selectedImageMimeType = '';  // 已选图片 MIME 类型
 
 // ==================== 初始化 ====================
 async function init() {
@@ -2132,14 +2210,14 @@ function quickSend(text) {
     sendMessage();
 }
 
-function addMessage(content, role, streaming = false) {
+function addMessage(content, role, streaming = false, imageData = null, historyContent = null) {
     const container = document.getElementById('chatMessages');
     const welcome = document.getElementById('welcomeMsg');
     if (welcome) welcome.style.display = 'none';
 
     // 记录到对话上下文（流式结束时更新内容）
     if (!streaming && role !== 'system') {
-        chatHistory.push({ role, content });
+        chatHistory.push({ role, content: historyContent !== null ? historyContent : content });
     }
 
     const id = 'msg_' + (++_msgIdCounter);
@@ -2147,10 +2225,15 @@ function addMessage(content, role, streaming = false) {
     div.className = `message ${role}`;
     div.id = id;
 
+    let imageHtml = '';
+    if (imageData && imageData.base64) {
+        imageHtml = `<img class="msg-image" src="data:${imageData.mime_type};base64,${imageData.base64}" alt="图片" onclick="window.open(this.src)">`;
+    }
+
     const avatarIcon = role === 'user' ? 'fa-user' : 'fa-sparkles';
     div.innerHTML = `
         <div class="msg-avatar"><i class="fas ${avatarIcon}"></i></div>
-        <div class="msg-bubble">${content}${streaming ? '<span class="cursor-blink">▌</span>' : ''}</div>
+        <div class="msg-bubble">${imageHtml}${content}${streaming ? '<span class="cursor-blink">▌</span>' : ''}</div>
     `;
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
@@ -2171,15 +2254,27 @@ function setChatStatus(text, state) {
 async function sendMessage() {
     const input = document.getElementById('inputMessage');
     const message = input.value.trim();
-    if (!message || !selectedModel || isStreaming) return;
+    const hasImage = !!selectedImageBase64;
+    if ((!message && !hasImage) || !selectedModel || isStreaming) return;
+
+    const imageData = hasImage ? { base64: selectedImageBase64, mime_type: selectedImageMimeType } : null;
+    const userContent = imageData
+        ? [
+            { type: 'text', text: message || '' },
+            { type: 'image_url', image_url: { url: `data:${imageData.mime_type};base64,${imageData.base64}` } }
+          ]
+        : message;
 
     input.value = '';
     input.style.height = 'auto';
-    addMessage(message, 'user');
+    clearSelectedImage();
+
+    addMessage(message, 'user', false, imageData, userContent);
 
     isStreaming = true;
     setChatStatus('思考中...', 'loading');
     document.getElementById('btnSend').disabled = true;
+    document.getElementById('btnUpload').disabled = true;
 
     const assistantId = addMessage('', 'assistant', true);
 
@@ -2189,7 +2284,7 @@ async function sendMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: selectedModel,
-                messages: chatHistory,
+                messages: [...chatHistory],
                 stream: true,
             }),
         });
@@ -2240,7 +2335,44 @@ async function sendMessage() {
         isStreaming = false;
         setChatStatus('就绪', 'ready');
         document.getElementById('btnSend').disabled = false;
+        document.getElementById('btnUpload').disabled = false;
     }
+}
+
+function handleImageSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+        showToast('请选择图片文件', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+        showToast('图片大小不能超过 10MB', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        selectedImageBase64 = e.target.result.split(',')[1];
+        selectedImageMimeType = file.type;
+
+        document.getElementById('imagePreview').src = e.target.result;
+        document.getElementById('imagePreviewContainer').style.display = 'inline-block';
+    };
+    reader.readAsDataURL(file);
+}
+
+function clearSelectedImage() {
+    selectedImageBase64 = null;
+    selectedImageMimeType = '';
+    const input = document.getElementById('chatImageInput');
+    if (input) input.value = '';
+    const previewContainer = document.getElementById('imagePreviewContainer');
+    if (previewContainer) previewContainer.style.display = 'none';
 }
 
 // ==================== API Key ====================

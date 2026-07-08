@@ -1431,23 +1431,6 @@
                 <i class="fas fa-chart-line" style="margin-right: 6px;"></i>
                 API 统计
             </button>
-            <button id="mainTabLogs" onclick="switchMainTab('logs')"
-                    class="main-tab-btn"
-                    style="
-                        flex: 1;
-                        padding: 0.75rem 1.5rem;
-                        border: none;
-                        background: transparent;
-                        color: var(--gray-500);
-                        font-weight: 600;
-                        font-size: 0.92rem;
-                        cursor: pointer;
-                        border-radius: 8px;
-                        transition: all 0.25s ease;
-                    ">
-                <i class="fas fa-scroll" style="margin-right: 6px;"></i>
-                系统日志
-            </button>
             <button id="mainTabSecurity" onclick="switchMainTab('security')"
                     class="main-tab-btn"
                     style="
@@ -1625,60 +1608,6 @@
        
 
     </main>
- <!-- Tab: 系统日志 -->
-
-        <div id="tabContentLogs" class="container" style="display: none;">
-            <!-- 日志控制栏 -->
-            <div style="display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap;">
-                <!-- 级别过滤 -->
-                <select id="logLevelFilter" onchange="filterLogs()"
-                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.85rem; background: white;">
-                    <option value="">全部级别</option>
-                    <option value="info">信息</option>
-                    <option value="success">成功</option>
-                    <option value="warning">警告</option>
-                    <option value="error">错误</option>
-                </select>
-
-                <!-- 分类过滤 -->
-                <select id="logCategoryFilter" onchange="filterLogs()"
-                        style="padding: 0.5rem 0.75rem; border: 1px solid var(--gray-300); border-radius: 8px; font-size: 0.85rem; background: white;">
-                    <option value="">全部分类</option>
-                </select>
-
-                <!-- 自动刷新开关 -->
-                <label style="display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--gray-600); cursor: pointer;">
-                    <input type="checkbox" id="logAutoRefresh" checked onchange="toggleAutoRefresh()" style="cursor: pointer;">
-                    自动刷新 (5s)
-                </label>
-
-                <!-- 手动刷新 -->
-                <button onclick="fetchLogs()" id="logRefreshBtn"
-                        style="padding: 0.5rem 1rem; background: var(--primary); color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 600; display: flex; align-items: center; gap: 0.4rem;"
-                        onmouseover="this.style.background='var(--primary-dark)'" onmouseout="this.style.background='var(--primary)'">
-                    <i class="fas fa-sync-alt" id="logRefreshIcon"></i> 刷新
-                </button>
-
-                <!-- 清空日志 -->
-                <button onclick="clearLogs()"
-                        style="padding: 0.5rem 1rem; background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 600;"
-                        onmouseover="this.style.background='var(--danger)'; this.style.color='white'" onmouseout="this.style.background='transparent'; this.style.color='var(--danger)'">
-                    <i class="fas fa-trash-alt"></i> 清空
-                </button>
-
-                <!-- 统计信息 -->
-                <span id="logStats" style="margin-left: auto; font-size: 0.82rem; color: var(--gray-500);">共 0 条日志</span>
-            </div>
-
-            <!-- 日志容器 -->
-            <div id="logContainer" style="background: #0d1117; border-radius: 12px; padding: 1rem; min-height: 500px; max-height: 70vh; overflow-y: auto; font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace; font-size: 0.83rem; line-height: 1.7; border: 1px solid #30363d; box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);">
-                <div id="logEmptyState" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #484f58;">
-                    <i class="fas fa-scroll" style="font-size: 3rem; margin-bottom: 1rem; opacity: 0.4;"></i>
-                    <p>暂无系统日志</p>
-                    <p style="font-size: 0.78rem; margin-top: 0.3rem;">模型加载、节点状态变更等事件将在此显示</p>
-                </div>
-            </div>
-        </div>
     <!-- ==================== 📊 Tab 7: API 统计面板 ==================== -->
     <div id="tabContentApiStats" class="container" style="display: none;">
 
@@ -2481,12 +2410,12 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                 
                                 <!-- 自定义模型管理按钮 -->
                                 <div style="margin-top:0.75rem; display:flex; gap:0.5rem;">
-                                    <button type="button" onclick="showCustomModelDialog('add')"
+                                    <button type="button" onclick="openCustomModelsPanel('add')"
                                             class="btn btn-sm"
                                             style="flex:1; padding:0.5rem; font-size:0.85rem; background:linear-gradient(135deg, #10b981 0%, #059669 100%); color:white; border:none; border-radius:8px; cursor:pointer;">
                                         <i class="fas fa-plus-circle"></i> 添加自定义模型
                                     </button>
-                                    <button type="button" onclick="showCustomModelsList()"
+                                    <button type="button" onclick="openCustomModelsPanel('list')"
                                             class="btn btn-sm"
                                             style="flex:1; padding:0.5rem; font-size:0.85rem; background:linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color:white; border:none; border-radius:8px; cursor:pointer;">
                                         <i class="fas fa-list"></i> 管理自定义模型 (<span id="customModelsCount">0</span>)
@@ -2523,8 +2452,8 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                            style="width:100%; padding:0.6rem; border:1px solid var(--gray-200); border-radius:8px; font-size:0.9rem; background:var(--gray-50);" />
                                     <small style="color:var(--info);">自动从配置获取</small>
                                 </div>
-                                <div class="form-group">
-                                    <label><i class="fas fa-balance-scale"></i> 分配策略</label>
+                                <div class="form-group" id="strategyGroup">
+                                    <label><i class="fas fa-balance-scale"></i> 单实例分配策略</label>
                                     <select id="inputStrategy" 
                                             style="width:100%; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.9rem;">
                                         <option value="smart" selected>智能策略（推荐）</option>
@@ -2532,6 +2461,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                         <option value="uniform">均匀分配</option>
                                         <option value="performance_weighted">按性能加权</option>
                                     </select>
+                                    <small style="color:var(--gray-500);">控制每个实例内部如何分片</small>
                                 </div>
                             </div>
 
@@ -2565,75 +2495,27 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                 <input type="hidden" id="inputTargetNodes" />
                                 <small id="targetNodesHint" style="color:var(--gray-500);">不选则使用所有在线节点 (已选择 <strong id="selectedNodeCount" style="color:var(--primary);">0</strong> 个节点)</small>
                             </div>
-                            
-                            <!-- 多实例配置 (新增) -->
-                            <div class="form-group" style="margin-top:1rem; padding:1rem; background:linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-radius:10px; border:1px solid #93c5fd33;">
-                                <label style="font-weight:700; color:#1e40af; margin-bottom:0.75rem; display:block;">
-                                    <i class="fas fa-clone"></i> 实例配置
-                                    <span class="badge" style="background:#10b981; color:white; margin-left:0.5rem; font-size:0.75rem;">多实例</span>
+
+                            <!-- 实例数量 -->
+                            <div id="instanceCountGroup" class="form-group" style="margin-top:1rem; padding:1rem; background:linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-radius:10px; border:1px solid #93c5fd33;">
+                                <label style="font-weight:700; color:#1e40af; margin-bottom:0.5rem; display:block;">
+                                    <i class="fas fa-clone"></i> 实例数量
                                 </label>
-                                
-                                <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem;">
-                                    <label style="flex:1; display:flex; align-items:center; gap:0.4rem; cursor:pointer; padding:0.5rem; background:#eff6ff; border-radius:8px; border:2px solid #3b82f6;" id="labelMultiInstance">
-                                        <input type="radio" name="instanceMode" value="multi" checked 
-                                               onchange="onInstanceModeChange('multi')"
-                                               style="cursor:pointer;">
-                                        <span style="font-size:0.9rem; font-weight:600;">多实例模式</span>
-                                        <span class="badge" style="background:#10b981; color:white; margin-left:0.3rem; font-size:0.7rem;">推荐</span>
-                                    </label>
+                                <div id="smartInstanceInput" style="display:grid; grid-template-columns: 1fr auto; gap:0.5rem; align-items:center;">
+                                    <input type="number" id="inputInstanceCount" value="1" min="1" max="10"
+                                           onchange="updateLoadButtonText()"
+                                           style="padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px; text-align:center; font-size:0.95rem; font-weight:600;">
+                                    <span style="color:#6b7280; font-weight:600;">个实例</span>
                                 </div>
-                                
-                                <!-- 单实例模式 (已禁用) -->
-                                <div id="singleInstanceConfig" style="display:none;">
-                                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem;">
-                                        <div>
-                                            <label style="font-size:0.85rem; color:#374151;"><i class="fas fa-tag"></i> 实例ID</label>
-                                            <input type="text" id="inputInstanceId" placeholder="默认: default"
-                                                   style="width:100%; padding:0.55rem; border:1px solid var(--gray-300); border-radius:6px; font-size:0.88rem;"
-                                                   title="留空使用默认实例，或输入自定义ID如 worker-1, production 等">
-                                            <small style="color:#6b7280; font-size:0.78rem;">留空=默认实例</small>
-                                        </div>
-                                        <div style="display:flex; align-items:end;">
-                                            <label style="display:flex; align-items:center; gap:0.35rem; cursor:pointer; font-size:0.88rem; color:#374151;">
-                                                <input type="checkbox" id="chkAutoInstance" 
-                                                       onchange="toggleAutoInstance()"
-                                                       style="cursor:pointer; width:16px; height:16px;">
-                                                自动生成ID
-                                            </label>
-                                        </div>
-                                    </div>
+                                <div id="fullInstanceHint" style="display:none; color:#6b7280; font-size:0.85rem; padding:0.5rem; background:white; border-radius:8px;">
+                                    Full 模式将自动计算所有 GPU 可承载的实例数量。
                                 </div>
-                                
-                                <!-- 多实例模式 (默认显示) -->
-                                <div id="multiInstanceConfig">
-                                    <div style="background:white; padding:0.75rem; border-radius:8px; margin-bottom:0.75rem;">
-                                        <label style="font-size:0.85rem; color:#374151; display:block; margin-bottom:0.5rem;">
-                                            <i class="fas fa-plus-circle"></i> 快速创建多个实例
-                                        </label>
-                                        <div style="display:grid; grid-template-columns: 1fr auto 1fr; gap:0.5rem; align-items:center;">
-                                            <input type="number" id="inputInstanceCount" value="2" min="1" max="10"
-                                                   style="padding:0.55rem; border:1px solid var(--gray-300); border-radius:6px; text-align:center; font-size:0.95rem; font-weight:600;">
-                                            <span style="color:#6b7280; font-weight:600;">个实例</span>
-                                            <button type="button" onclick="previewMultiInstances()" 
-                                                    class="btn btn-outline btn-sm" style="border-color:#3b82f6; color:#3b82f6; width:100%;">
-                                                <i class="fas fa-eye"></i> 预览
-                                            </button>
-                                        </div>
-                                        <small style="color:#6b7280; font-size:0.78rem; display:block; margin-top:0.4rem;">
-                                            将自动生成唯一实例ID（自动跳过已存在的ID）
-                                        </small>
-                                    </div>
-                                    
-                                    <div id="multiInstancesPreview" style="display:none; background:#fef3c7; padding:0.75rem; border-radius:8px; border:1px solid #fbbf2444;">
-                                        <strong style="color:#92400e; font-size:0.88rem;">
-                                            <i class="fas fa-info-circle"></i> 将创建以下实例:
-                                        </strong>
-                                        <div id="instancesPreviewList" style="margin-top:0.5rem; font-family:monospace; font-size:0.85rem; color:#78350f;"></div>
-                                    </div>
-                                </div>
+                                <small id="instanceCountHint" style="color:#6b7280; font-size:0.78rem; display:block; margin-top:0.4rem;">
+                                    Smart 模式：每个实例将完整加载到单个节点。
+                                </small>
                             </div>
                             </div>
-                            
+
                             <!-- HA 模式说明 (新增) -->
                             <div id="haModeInfo" style="display:none; margin-top:1rem; padding:1rem; background:linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius:10px; border:1px solid #fbbf2444;">
                                 <strong style="color:#92400e; font-size:0.92rem; display:block; margin-bottom:0.5rem;">
@@ -2654,11 +2536,15 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     <!-- 预览分配面板 -->
                     <div id="previewPanel" class="model-panel" style="display:none; padding:1rem;">
                         <div class="form-group">
-                            <label><i class="fas fa-tag"></i> 模型ID</label>
-                            <input type="text" id="previewModelId" placeholder="输入要预览的模型"
-                                   style="width:100%; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px;" />
+                            <label><i class="fas fa-cube"></i> 选择模型</label>
+                            <select id="previewModelSelect" onchange="onPreviewModelSelect(this.value)"
+                                    style="width:100%; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px; background:white;">
+                                <option value="">快速选择模型...</option>
+                            </select>
+                            <input type="text" id="previewModelId" placeholder="或手动输入模型ID"
+                                   style="width:100%; margin-top:0.5rem; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px;" />
                         </div>
-                        
+
                         <div style="display:grid; grid-template-columns: 1fr 1fr; gap:0.75rem; margin-top:0.75rem;">
                             <div class="form-group">
                                 <label>总层数</label>
@@ -2676,11 +2562,37 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                 </select>
                             </div>
                         </div>
-                        
+
+                        <!-- 节点来源 -->
+                        <div class="form-group" style="margin-top:0.75rem;">
+                            <label>节点来源</label>
+                            <div style="display:flex; gap:0.5rem;">
+                                <label id="labelPreviewCluster" style="flex:1; display:flex; align-items:center; gap:0.35rem; cursor:pointer; padding:0.5rem; background:#eff6ff; border:2px solid #3b82f6; border-radius:8px;">
+                                    <input type="radio" name="previewNodeSource" value="cluster" checked onchange="onPreviewNodeSourceChange(this.value)">
+                                    <span style="font-size:0.9rem; font-weight:600;">当前集群节点</span>
+                                </label>
+                                <label id="labelPreviewSimulate" style="flex:1; display:flex; align-items:center; gap:0.35rem; cursor:pointer; padding:0.5rem; background:#f3f4f6; border:2px solid transparent; border-radius:8px;">
+                                    <input type="radio" name="previewNodeSource" value="simulate" onchange="onPreviewNodeSourceChange(this.value)">
+                                    <span style="font-size:0.9rem; font-weight:600;">模拟节点</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- 模拟节点输入 -->
+                        <div id="previewSimulatedNodes" style="display:none; margin-top:0.75rem; padding:0.75rem; background:#f3f4f6; border-radius:8px;">
+                            <label style="font-size:0.85rem; color:#374151; display:block; margin-bottom:0.4rem;">
+                                <i class="fas fa-memory"></i> 模拟节点显存（GB）
+                            </label>
+                            <input type="text" id="previewNodeMemory" value="16, 16, 16"
+                                   placeholder="例如: 16, 16, 16"
+                                   style="width:100%; padding:0.6rem; border:1px solid var(--gray-300); border-radius:8px;">
+                            <small style="color:#6b7280; font-size:0.78rem;">用英文逗号分隔每个节点的显存，单位 GB</small>
+                        </div>
+
                         <button onclick="handlePreviewAllocation()" class="btn btn-outline" style="width:100%; margin-top:1rem;">
                             <i class="fas fa-search"></i> 预览分配方案
                         </button>
-                        
+
                         <div id="previewResult" style="margin-top:1rem;"></div>
                     </div>
                 </div>
@@ -2786,9 +2698,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 });
                 console.log('[Markdown] marked.js 初始化成功');
             }
-            
-            // 初始化为多实例模式（移除单实例选项后）
-            onInstanceModeChange('multi');
             
             // 初始化加载方式
             onLoadModeChange('smart');
@@ -3666,6 +3575,9 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     
                     logOperation(`[MODELS] 已加载 ${availableModels.length} 个可用模型`, 'info');
                     
+                    // 同步更新预览分配面板的模型下拉框
+                    populatePreviewModelSelect();
+                    
                 } else {
                     select.innerHTML = '<option value="" disabled>加载失败</option>';
                 }
@@ -3716,12 +3628,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 selectedLayersEl.textContent = model.layers + ' 层';
                 
                 btnLoad.disabled = false;
-                
-                if (currentInstanceMode === 'multi') {
-                    previewMultiInstances();
-                } else {
-                    updateLoadButtonText();
-                }
+                updateLoadButtonText();
             }
         }
 
@@ -3927,71 +3834,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             }
         }
         
-        // ==================== 多实例管理功能 (新增) ====================
-        
-        let currentInstanceMode = 'multi';  // 强制使用多实例模式
-        
-        function onInstanceModeChange(mode) {
-            // 强制保持多实例模式，忽略单实例选项
-            currentInstanceMode = 'multi';
-            
-            const singleConfig = document.getElementById('singleInstanceConfig');
-            const multiConfig = document.getElementById('multiInstanceConfig');
-            const labelMulti = document.getElementById('labelMultiInstance');
-            
-            singleConfig.style.display = 'none';
-            multiConfig.style.display = 'block';
-            labelMulti.style.borderColor = '#3b82f6';
-            labelMulti.style.background = '#eff6ff';
-            
-            previewMultiInstances();
-            updateLoadButtonText();
-        }
-        
-        function toggleAutoInstance() {
-            const chk = document.getElementById('chkAutoInstance');
-            const inputInstanceId = document.getElementById('inputInstanceId');
-            
-            if (chk.checked) {
-                inputInstanceId.disabled = true;
-                inputInstanceId.value = '';
-                inputInstanceId.placeholder = '(自动生成)';
-                inputInstanceId.style.background = '#f3f4f6';
-            } else {
-                inputInstanceId.disabled = false;
-                inputInstanceId.value = '';
-                inputInstanceId.placeholder = '默认: default';
-                inputInstanceId.style.background = 'white';
-            }
-            
-            updateLoadButtonText();
-        }
-        
-        function previewMultiInstances() {
-            const count = parseInt(document.getElementById('inputInstanceCount').value) || 2;
-            const modelName = document.getElementById('selectedModelName').textContent || 'model';
-            const previewDiv = document.getElementById('multiInstancesPreview');
-            const listDiv = document.getElementById('instancesPreviewList');
-            
-            if (count < 1 || count > 10) {
-                previewDiv.style.display = 'none';
-                return;
-            }
-            
-            // ✅ 简化：只显示数量，不预测具体ID（由后端智能分配）
-            listDiv.innerHTML = `
-                <div style="padding:0.5rem; color:#059669; font-size:0.9rem;">
-                    <i class="fas fa-magic"></i> 将创建 <strong>${count}</strong> 个 <strong>${modelName}</strong> 实例
-                </div>
-                <div style="padding:0.35rem 0; color:#78350f; font-size:0.82rem;">
-                    <i class="fas fa-info-circle"></i> 后端自动分配唯一实例ID（跳过已存在的ID）
-                </div>
-            `;
-            
-            previewDiv.style.display = 'block';
-            updateLoadButtonText();
-        }
-        
         function updateLoadButtonText() {
             const btnLoad = document.getElementById('btnLoadModel');
             const loadMode = document.getElementById('inputLoadMode').value;
@@ -4016,8 +3858,8 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 return;
             }
             
-            // 强制使用多实例模式
-            const count = parseInt(document.getElementById('inputInstanceCount').value) || 2;
+            // Smart 模式：按用户指定的实例数量加载
+            const count = parseInt(document.getElementById('inputInstanceCount').value) || 1;
             btnLoad.innerHTML = `<i class="fas fa-clone"></i> 加载 ${count} 个 ${selectedName} 实例`;
         }
         
@@ -4025,21 +3867,34 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const smartFullFields = document.getElementById('smartFullFields');
             const haModeInfo = document.getElementById('haModeInfo');
             const loadModeHint = document.getElementById('loadModeHint');
-            const strategySelect = document.getElementById('inputStrategy');
+            const strategyGroup = document.getElementById('strategyGroup');
+            const instanceCountGroup = document.getElementById('instanceCountGroup');
+            const smartInstanceInput = document.getElementById('smartInstanceInput');
+            const fullInstanceHint = document.getElementById('fullInstanceHint');
+            const instanceCountHint = document.getElementById('instanceCountHint');
             
             if (mode === 'ha') {
                 smartFullFields.style.display = 'none';
                 haModeInfo.style.display = 'block';
+                instanceCountGroup.style.display = 'none';
                 loadModeHint.innerHTML = '<i class="fas fa-info-circle"></i> HA 模式：自动生成主备/双活方案，分散到多节点。';
             } else if (mode === 'full') {
                 smartFullFields.style.display = 'block';
                 haModeInfo.style.display = 'none';
-                strategySelect.value = 'smart';
+                instanceCountGroup.style.display = 'block';
+                smartInstanceInput.style.display = 'none';
+                fullInstanceHint.style.display = 'block';
+                instanceCountHint.textContent = 'Full 模式：每个 GPU 尽可能创建一个实例，单实例内部按上方策略分片。';
+                strategyGroup.style.display = 'block';
                 loadModeHint.innerHTML = '<i class="fas fa-info-circle"></i> Full 模式：自动创建尽可能多的模型实例，占满所有 GPU 显存空间。';
             } else {
                 smartFullFields.style.display = 'block';
                 haModeInfo.style.display = 'none';
-                strategySelect.value = 'smart';
+                instanceCountGroup.style.display = 'block';
+                smartInstanceInput.style.display = 'grid';
+                fullInstanceHint.style.display = 'none';
+                instanceCountHint.textContent = 'Smart 模式：每个实例将完整加载到单个节点。';
+                strategyGroup.style.display = 'none';
                 loadModeHint.innerHTML = '<i class="fas fa-info-circle"></i> Smart 模式：模型完整加载到单个节点，延迟最低。';
             }
             
@@ -4290,7 +4145,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const modelTab = document.getElementById('mainTabModel');
             const webSocketTab = document.getElementById('mainTabWebSocket');
             const apiStatsTab = document.getElementById('mainTabApiStats');
-            const logsTab = document.getElementById('mainTabLogs');
             const securityTab = document.getElementById('mainTabSecurity');
             const clusterContent = document.getElementById('tabContentCluster');
             const inferenceContent = document.getElementById('tabContentInference');
@@ -4299,11 +4153,10 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const modelContent = document.getElementById('tabContentModel');
             const webSocketContent = document.getElementById('tabContentWebSocket');
             const apiStatsContent = document.getElementById('tabContentApiStats');
-            const logsContent = document.getElementById('tabContentLogs');
             const securityContent = document.getElementById('tabContentSecurity');
 
             // 重置所有 tab
-            [clusterTab, inferenceTab, apiKeyTab, usersTab, modelTab, webSocketTab, apiStatsTab, logsTab, securityTab].forEach(t => {
+            [clusterTab, inferenceTab, apiKeyTab, usersTab, modelTab, webSocketTab, apiStatsTab, securityTab].forEach(t => {
                 if (t) {
                     t.classList.remove('active');
                     t.style.background = 'transparent';
@@ -4320,7 +4173,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             if (modelContent) modelContent.style.display = 'none';
             if (webSocketContent) webSocketContent.style.display = 'none';
             if (apiStatsContent) apiStatsContent.style.display = 'none';
-            if (logsContent) logsContent.style.display = 'none';
             if (securityContent) securityContent.style.display = 'none';
 
             // 激活选中 tab
@@ -4365,17 +4217,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                         });
                     }
                 }, 50);
-            } else if (tab === 'logs') {
-                activeTab = logsTab;
-                activeContent = logsContent;
-                // 切到日志 tab 时自动加载（异步，不阻塞 UI 切换）
-                if (typeof fetchLogs === 'function') {
-                    fetchLogs().catch(err => {
-                        console.error('[switchMainTab] 日志加载失败:', err);
-                    });
-                } else {
-                    console.warn('[switchMainTab] fetchLogs 函数未定义');
-                }
             } else if (tab === 'security') {
                 activeTab = securityTab;
                 activeContent = securityContent;
@@ -4489,7 +4330,8 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const modelId = document.getElementById('inputModelId').value.trim();
             const modelPath = document.getElementById('inputModelPath').value.trim();
             const nLayers = parseInt(document.getElementById('inputNLayers').value);
-            const strategy = document.getElementById('inputStrategy').value;
+            // Smart 模式固定使用 smart 策略；Full 模式使用用户选择的单实例分片策略
+            const strategy = loadMode === 'smart' ? 'smart' : document.getElementById('inputStrategy').value;
             
             const targetHiddenInput = document.getElementById('inputTargetNodes');
             const targetNodes = targetHiddenInput.value ? targetHiddenInput.value.split(',').filter(v => v.trim()) : [];
@@ -4654,27 +4496,116 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             }
         }
         
+        function populatePreviewModelSelect() {
+            const select = document.getElementById('previewModelSelect');
+            if (!select) return;
+            
+            select.innerHTML = '<option value="">快速选择模型...</option>';
+            
+            const models = availableModels || [];
+            models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.model_id;
+                option.textContent = `${model.pretty_name} (${model.layers}层)`;
+                option.dataset.layers = model.layers;
+                option.dataset.repo = model.repo || '';
+                select.appendChild(option);
+            });
+            
+            const customOpt = document.createElement('option');
+            customOpt.value = '__custom__';
+            customOpt.textContent = '其它（手动输入）';
+            select.appendChild(customOpt);
+        }
+        
+        function onPreviewModelSelect(value) {
+            const modelIdInput = document.getElementById('previewModelId');
+            const nLayersInput = document.getElementById('previewNLayers');
+            const select = document.getElementById('previewModelSelect');
+            
+            if (!value || value === '__custom__') {
+                if (value === '__custom__') {
+                    modelIdInput.value = '';
+                    modelIdInput.focus();
+                }
+                return;
+            }
+            
+            modelIdInput.value = value;
+            
+            let layers = null;
+            for (const opt of select.options) {
+                if (opt.value === value && opt.dataset.layers) {
+                    layers = parseInt(opt.dataset.layers, 10);
+                    break;
+                }
+            }
+            
+            if (layers && !isNaN(layers) && layers > 0) {
+                nLayersInput.value = layers;
+            }
+        }
+        
+        function onPreviewNodeSourceChange(source) {
+            const clusterLabel = document.getElementById('labelPreviewCluster');
+            const simulateLabel = document.getElementById('labelPreviewSimulate');
+            const simNodesDiv = document.getElementById('previewSimulatedNodes');
+            
+            if (source === 'simulate') {
+                clusterLabel.style.background = '#f3f4f6';
+                clusterLabel.style.borderColor = 'transparent';
+                simulateLabel.style.background = '#eff6ff';
+                simulateLabel.style.borderColor = '#3b82f6';
+                simNodesDiv.style.display = 'block';
+            } else {
+                clusterLabel.style.background = '#eff6ff';
+                clusterLabel.style.borderColor = '#3b82f6';
+                simulateLabel.style.background = '#f3f4f6';
+                simulateLabel.style.borderColor = 'transparent';
+                simNodesDiv.style.display = 'none';
+            }
+        }
+        
         async function handlePreviewAllocation() {
             const modelId = document.getElementById('previewModelId').value.trim() || 'test-model';
             const nLayers = parseInt(document.getElementById('previewNLayers').value) || 32;
             const strategy = document.getElementById('previewStrategy').value;
+            const nodeSource = document.querySelector('input[name="previewNodeSource"]:checked')?.value || 'cluster';
             
-            logOperation(`[PREVIEW] 预览分配: ${modelId} (${nLayers}层, ${strategy})`, 'info');
+            let simulatedNodes = null;
+            if (nodeSource === 'simulate') {
+                const memInput = document.getElementById('previewNodeMemory').value || '16, 16, 16';
+                const memValues = memInput.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v) && v > 0);
+                if (memValues.length === 0) {
+                    document.getElementById('previewResult').innerHTML = `<p style="color:var(--danger); padding:0.5rem;">请至少输入一个有效的模拟节点显存</p>`;
+                    return;
+                }
+                simulatedNodes = memValues.map(memory_gb => ({ memory_gb }));
+            }
+            
+            const simParam = simulatedNodes ? `&simulated_nodes=${encodeURIComponent(JSON.stringify(simulatedNodes))}` : '';
+            logOperation(`[PREVIEW] 预览分配: ${modelId} (${nLayers}层, ${strategy}, ${nodeSource === 'simulate' ? simulatedNodes.length + '个模拟节点' : '当前集群'})`, 'info');
             
             try {
-                const result = await apiCall(`/api/pool/preview?model_id=${encodeURIComponent(modelId)}&n_layers=${nLayers}&strategy=${strategy}`);
+                const result = await apiCall(`/api/pool/preview?model_id=${encodeURIComponent(modelId)}&n_layers=${nLayers}&strategy=${strategy}${simParam}`);
                 
                 const previewDiv = document.getElementById('previewResult');
                 
                 if (result && result.success && result.data) {
                     const data = result.data;
+                    const sourceBadge = nodeSource === 'simulate' 
+                        ? '<span class="badge" style="background:#8b5cf6; color:white; margin-left:0.5rem; font-size:0.7rem;">模拟节点</span>'
+                        : '<span class="badge" style="background:#3b82f6; color:white; margin-left:0.5rem; font-size:0.7rem;">当前集群</span>';
                     let html = `
                         <div style="padding:1rem; background:#ecfdf5; border-radius:8px; border:1px solid #10b98133; margin-top:0.75rem;">
                             <div style="font-weight:600; color:#065f46; margin-bottom:0.5rem;">
-                                分配方案 - ${data.strategy}
+                                分配方案 - ${data.strategy} ${sourceBadge}
                             </div>
                             <div style="font-size:0.85rem; color:#047857;">
                                 总层数: ${data.total_layers} | 节点数: ${data.allocations.length}
+                            </div>
+                            <div style="font-size:0.8rem; color:#6b7280; margin-top:0.25rem;">
+                                ${data.decision_reason || ''}
                             </div>
                     `;
                     
@@ -4690,6 +4621,14 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                             </div>
                         `;
                     });
+                    
+                    if (data.safety_warnings && data.safety_warnings.length > 0) {
+                        html += `
+                            <div style="margin-top:0.5rem; padding:0.5rem; background:#fef3c7; border-radius:6px; color:#92400e; font-size:0.8rem;">
+                                <i class="fas fa-exclamation-triangle"></i> ${data.safety_warnings.join('; ')}
+                            </div>
+                        `;
+                    }
                     
                     html += '</div>';
                     previewDiv.innerHTML = html;
@@ -6775,7 +6714,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         }
 
         // ==================== 自定义模型管理 ====================
-        
+
         async function loadCustomModelsCount() {
             try {
                 const result = await apiCall('/api/models/custom');
@@ -6834,46 +6773,74 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             }
         }
 
-        async function showCustomModelDialog(mode, modelData = null) {
-            const dialog = document.getElementById('customModelDialog');
+        /** 打开自定义模型统一管理面板 */
+        async function openCustomModelsPanel(view = 'list') {
+            const panel = document.getElementById('customModelsListPanel');
+            panel.style.display = 'flex';
+
+            if (view === 'add') {
+                await showCustomModelForm('add');
+            } else {
+                hideCustomModelForm();
+            }
+
+            await showCustomModelsList();
+        }
+
+        async function showCustomModelForm(mode, modelData = null) {
+            const formContainer = document.getElementById('customModelFormContainer');
             const title = document.getElementById('customModelDialogTitle');
             const form = document.getElementById('customModelForm');
 
             // 动态填充引擎类型下拉框（从 custom_models.json 的 repo 键收集）
             await populateEngineTypeOptions();
-            
+
             if (mode === 'add') {
-                title.textContent = '添加自定义模型';
+                title.innerHTML = '<i class="fas fa-cube"></i> 添加自定义模型';
                 form.reset();
                 form.dataset.mode = 'add';
                 form.dataset.modelId = '';
+                document.getElementById('customModelId').disabled = false;
+                // 设置默认值
+                document.getElementById('customCategory').value = 'general';
+                document.getElementById('customPriority').value = '0.8';
             } else if (mode === 'edit' && modelData) {
-                title.textContent = '编辑自定义模型';
+                title.innerHTML = '<i class="fas fa-cube"></i> 编辑自定义模型';
                 form.dataset.mode = 'edit';
                 form.dataset.modelId = modelData.model_id;
-                
+
                 document.getElementById('customModelId').value = modelData.model_id;
                 document.getElementById('customModelId').disabled = true;
                 document.getElementById('customPrettyName').value = modelData.pretty_name || '';
                 document.getElementById('customLayers').value = modelData.layers || '';
-                
+
                 const repoObj = modelData.repo || {};
                 const firstRepo = Object.values(repoObj)[0] || '';
                 const firstEngine = Object.keys(repoObj)[0] || '';
-                
+
                 document.getElementById('customRepo').value = firstRepo;
                 // 编辑模式：选中已有引擎（populateEngineTypeOptions 已填充选项）
                 if (firstEngine) {
                     document.getElementById('customEngineType').value = firstEngine;
                 }
+
+                // 填充 allocation 字段
+                const allocation = modelData.allocation || {};
+                document.getElementById('customLayerMemoryMB').value = allocation.layer_memory_mb || '';
+                document.getElementById('customParamCount').value = allocation.param_count !== undefined ? allocation.param_count : '';
+                document.getElementById('customCategory').value = allocation.category || 'general';
+                document.getElementById('customPriority').value = allocation.priority !== undefined ? allocation.priority : '0.8';
             }
-            
-            dialog.style.display = 'flex';
+
+            formContainer.style.display = 'block';
+            // 将表单滚动到可视区域
+            formContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
 
-        function hideCustomModelDialog() {
-            document.getElementById('customModelDialog').style.display = 'none';
+        function hideCustomModelForm() {
+            const formContainer = document.getElementById('customModelFormContainer');
             const form = document.getElementById('customModelForm');
+            formContainer.style.display = 'none';
             form.reset();
             form.dataset.mode = 'add';
             form.dataset.modelId = '';
@@ -6882,34 +6849,44 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
 
         async function saveCustomModel(event) {
             event.preventDefault();
-            
+
             const form = event.target;
             const mode = form.dataset.mode;
-            
+
             const data = {
                 model_id: document.getElementById('customModelId').value.trim(),
                 pretty_name: document.getElementById('customPrettyName').value.trim(),
                 layers: parseInt(document.getElementById('customLayers').value) || 0,
                 repo: document.getElementById('customRepo').value.trim(),
-                engine_type: document.getElementById('customEngineType').value
+                engine_type: document.getElementById('customEngineType').value,
+                allocation: {
+                    layer_memory_mb: parseInt(document.getElementById('customLayerMemoryMB').value) || 0,
+                    param_count: parseFloat(document.getElementById('customParamCount').value) || 0,
+                    category: document.getElementById('customCategory').value.trim() || 'general',
+                    priority: parseFloat(document.getElementById('customPriority').value)
+                }
             };
-            
+
+            if (isNaN(data.allocation.priority) || data.allocation.priority < 0 || data.allocation.priority > 1) {
+                data.allocation.priority = 0.8;
+            }
+
             if (!data.model_id) {
                 showToast('请输入模型ID', 'warning');
                 return;
             }
-            
+
             if (!data.repo) {
                 showToast('请输入模型仓库路径', 'warning');
                 return;
             }
-            
+
             try {
                 let result;
                 const btn = document.getElementById('btnSaveCustomModel');
                 btn.disabled = true;
                 btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 保存中...';
-                
+
                 if (mode === 'edit') {
                     result = await apiCall(`/api/models/custom/${form.dataset.modelId}`, {
                         method: 'PUT',
@@ -6921,11 +6898,11 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                         body: JSON.stringify(data)
                     });
                 }
-                
+
                 if (result && result.success) {
                     showToast(result.message || '保存成功', 'success');
-                    hideCustomModelDialog();
-                    await refreshAvailableModels();
+                    hideCustomModelForm();
+                    await loadAvailableModels();
                     await loadCustomModelsCount();
                     if (typeof showCustomModelsList === 'function') {
                         await showCustomModelsList();
@@ -6933,10 +6910,10 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 } else {
                     showToast(result?.error || '保存失败', 'error');
                 }
-                
+
                 btn.disabled = false;
                 btn.innerHTML = '<i class="fas fa-save"></i> 保存';
-                
+
             } catch (e) {
                 showToast('保存失败: ' + e.message, 'error');
                 document.getElementById('btnSaveCustomModel').disabled = false;
@@ -6948,15 +6925,15 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             if (!confirm(`确定要删除模型 "${modelId}" 吗？`)) {
                 return;
             }
-            
+
             try {
                 const result = await apiCall(`/api/models/custom/${modelId}`, {
                     method: 'DELETE'
                 });
-                
+
                 if (result && result.success) {
                     showToast(result.message || '删除成功', 'success');
-                    await refreshAvailableModels();
+                    await loadAvailableModels();
                     await loadCustomModelsCount();
                     await showCustomModelsList();
                 } else {
@@ -6970,28 +6947,28 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         async function showCustomModelsList() {
             const panel = document.getElementById('customModelsListPanel');
             const listContainer = document.getElementById('customModelsListContainer');
-            
-            panel.style.display = 'block';
-            
+
+            panel.style.display = 'flex';
+
             try {
                 listContainer.innerHTML = '<div style="text-align:center; padding:2rem;"><i class="fas fa-spinner fa-spin" style="font-size:2rem; color:var(--primary);"></i><br><br>加载中...</div>';
-                
+
                 const result = await apiCall('/api/models/custom');
-                
+
                 if (!result || !result.success) {
                     listContainer.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--danger);"><i class="fas fa-exclamation-triangle"></i><br><br>加载失败: ${result?.error || '未知错误'}</div>`;
                     return;
                 }
-                
+
                 const models = result.data.models || [];
                 document.getElementById('customModelsCount').textContent = models.length;
-                
+
                 if (models.length === 0) {
                     listContainer.innerHTML = `
                         <div style="text-align:center; padding:2rem; color:var(--gray-500);">
                             <i class="fas fa-inbox" style="font-size:3rem; margin-bottom:1rem;"></i>
                             <p>暂无自定义模型</p>
-                            <button onclick="hideCustomModelsList(); showCustomModelDialog('add')" 
+                            <button type="button" onclick="showCustomModelForm('add')"
                                     class="btn btn-primary" style="margin-top:1rem;">
                                 <i class="fas fa-plus"></i> 添加第一个模型
                             </button>
@@ -6999,40 +6976,50 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     `;
                     return;
                 }
-                
+
                 let html = '<table style="width:100%; border-collapse:collapse;">';
                 html += '<thead><tr style="background:var(--gray-100);">';
                 html += '<th style="padding:0.75rem; text-align:left; border-bottom:2px solid var(--gray-300);">模型ID</th>';
                 html += '<th style="padding:0.75rem; text-align:left; border-bottom:2px solid var(--gray-300);">名称</th>';
                 html += '<th style="padding:0.75rem; text-align:center; border-bottom:2px solid var(--gray-300);">层数</th>';
+                html += '<th style="padding:0.75rem; text-align:center; border-bottom:2px solid var(--gray-300);">分配</th>';
                 html += '<th style="padding:0.75rem; text-align:left; border-bottom:2px solid var(--gray-300);">仓库</th>';
                 html += '<th style="padding:0.75rem; text-align:center; border-bottom:2px solid var(--gray-300);">操作</th>';
                 html += '</tr></thead><tbody>';
-                
+
                 models.forEach(model => {
                     const repoObj = model.repo || {};
                     const repoName = Object.values(repoObj)[0] || '-';
-                    
+                    const allocation = model.allocation || {};
+                    const allocHtml = `
+                        <div style="font-size:0.75rem; line-height:1.4;">
+                            <div><i class="fas fa-memory" style="color:var(--primary); width:14px;"></i> ${allocation.layer_memory_mb || 0} MB</div>
+                            <div><i class="fas fa-weight-hanging" style="color:var(--primary); width:14px;"></i> ${allocation.param_count !== undefined ? allocation.param_count : 0} B</div>
+                            <div><i class="fas fa-star-half-alt" style="color:var(--primary); width:14px;"></i> ${allocation.priority !== undefined ? allocation.priority : 0.8}</div>
+                        </div>
+                    `;
+
                     html += `<tr style="border-bottom:1px solid var(--gray-200);">`;
                     html += `<td style="padding:0.75rem; font-family:monospace; font-size:0.85rem;">${model.model_id}</td>`;
                     html += `<td style="padding:0.75rem;">${model.pretty_name}</td>`;
                     html += `<td style="padding:0.75rem; text-align:center;">${model.layers}</td>`;
-                    html += `<td style="padding:0.75rem; font-size:0.8rem; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${repoName}">${repoName}</td>`;
+                    html += `<td style="padding:0.75rem; text-align:center;">${allocHtml}</td>`;
+                    html += `<td style="padding:0.75rem; font-size:0.8rem; max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${repoName}">${repoName}</td>`;
                     html += `<td style="padding:0.75rem; text-align:center;">`;
-                    html += `<button onclick='showCustomModelDialog("edit", ${JSON.stringify(model).replace(/'/g, "\\'")})' 
+                    html += `<button type="button" onclick='showCustomModelForm("edit", ${JSON.stringify(model).replace(/'/g, "\\'")})'
                                     class="btn btn-sm" style="margin-right:0.25rem; padding:0.4rem 0.6rem; background:#3b82f6; color:white; border:none; border-radius:6px; cursor:pointer;">
                                 <i class="fas fa-edit"></i>
                              </button>`;
-                    html += `<button onclick='deleteCustomModel("${model.model_id}")' 
+                    html += `<button type="button" onclick='deleteCustomModel("${model.model_id}")'
                                     class="btn btn-sm" style="padding:0.4rem 0.6rem; background:#ef4444; color:white; border:none; border-radius:6px; cursor:pointer;">
                                 <i class="fas fa-trash"></i>
                              </button>`;
                     html += `</td></tr>`;
                 });
-                
+
                 html += '</tbody></table>';
                 listContainer.innerHTML = html;
-                
+
             } catch (e) {
                 listContainer.innerHTML = `<div style="text-align:center; padding:2rem; color:var(--danger);"><i class="fas fa-exclamation-triangle"></i><br><br>加载异常: ${e.message}</div>`;
             }
@@ -7040,6 +7027,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
 
         function hideCustomModelsList() {
             document.getElementById('customModelsListPanel').style.display = 'none';
+            hideCustomModelForm();
         }
 
         // ==================== ✨ WebSocket 监控功能 ====================
@@ -8192,228 +8180,6 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             setTimeout(() => toast.remove(), 3000);
         }
 
-        // ==================== 系统日志面板 ====================
-
-        let _logAutoRefreshTimer = null;
-        let _allLogsCache = [];      // 缓存全部原始日志（用于客户端过滤）
-        const LOG_LEVEL_STYLES = {
-            info:    { bg: '#1f2937', icon: 'ℹ️',  color: '#60a5fa', label: 'INFO' },
-            success: { bg: '#14532d', icon: '✅', color: '#34d399', label: 'OK  ' },
-            warning: { bg: '#451a03', icon: '⚠️',  color: '#fbbf24', label: 'WARN' },
-            error:   { bg: '#450a0a', icon: '❌', color: '#f87171', label: 'ERR ' }
-        };
-        const CATEGORY_LABELS = {
-            'allocation':     '模型分配',
-            'fault-recovery': '故障恢复',
-            'node':           '节点状态',
-            'model':          '模型管理'
-        };
-
-        async function fetchLogs() {
-            const btn = document.getElementById('logRefreshBtn');
-            const icon = document.getElementById('logRefreshIcon');
-            if (btn) { btn.disabled = true; }
-            if (icon) { icon.classList.add('fa-spin'); }
-
-            try {
-                const level = document.getElementById('logLevelFilter')?.value || '';
-                const category = document.getElementById('logCategoryFilter')?.value || '';
-
-                const params = new URLSearchParams();
-                if (level) params.set('level', level);
-                if (category) params.set('category', category);
-                params.set('limit', '200');
-
-                const resp = await fetch(`/api/logs?${params}`);
-                const result = await resp.json();
-
-                if (result.success) {
-                    _allLogsCache = result.data.logs;
-                    renderLogs(_allLogsCache);
-                    updateLogStats(result.data.total);
-
-                    // 更新分类下拉选项
-                    updateCategoryOptions(result.data.categories);
-                } else {
-                    console.warn('[Logs] API 返回非成功状态:', result);
-                    renderLogs([]);
-                }
-            } catch (e) {
-                console.error('[Logs] 获取失败:', e);
-                renderErrorState();
-            } finally {
-                if (btn) { btn.disabled = false; }
-                if (icon) { icon.classList.remove('fa-spin'); }
-            }
-        }
-
-        function renderLogs(logs) {
-            const container = document.getElementById('logContainer');
-            if (!container) return;
-
-            if (!logs || logs.length === 0) {
-                container.innerHTML = `
-                    <div style="display:flex;flex-direction:column;align-items:center;
-                                justify-content:center;height:300px;color:#484f58;">
-                        <i class="fas fa-scroll" style="font-size:3rem;margin-bottom:1rem;opacity:0.4;"></i>
-                        <p>暂无系统日志</p>
-                        <p style="font-size:0.78rem;margin-top:0.3rem;">模型加载、节点状态变更等事件将在此显示</p>
-                    </div>`;
-                return;
-            }
-
-            let html = '';
-            logs.forEach((entry, idx) => {
-                const style = LOG_LEVEL_STYLES[entry.level] || LOG_LEVEL_STYLES.info;
-                const catLabel = CATEGORY_LABELS[entry.category] || entry.category;
-
-                // 构建详情展示
-                let detailHtml = '';
-                if (entry.detail && Object.keys(entry.detail).length > 0) {
-                    const detailStr = Object.entries(entry.detail)
-                        .map(([k, v]) => `<span style="color:#8b949e">${k}=${JSON.stringify(v)}</span>`)
-                        .join(' ');
-                    detailHtml = `<div style="color:#8b949e;font-size:0.76rem;margin-left:2.5em;
-                                       margin-top:-4px;padding-bottom:6px;border-bottom:1px solid #21262d;">
-                                        ${detailStr}</div>`;
-                }
-
-                // 新日志高亮动画
-                const isNew = idx < 3 ? 'animation: logFadeIn 0.3s ease-out;' : '';
-
-                html += `
-                    <div style="
-                        display: flex; gap: 0.75rem; padding: 6px 10px;
-                        border-radius: 6px; margin-bottom: 2px;
-                        background: ${idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)'};
-                        ${isNew}
-                    " title="${entry.full_time}">
-                        <!-- 时间 -->
-                        <span style="color:#6e7681; min-width: 65px; flex-shrink: 0;
-                                     font-variant-numeric: tabular-nums;">
-                            ${entry.timestamp}
-                        </span>
-                        <!-- 级别标签 -->
-                        <span style="background:${style.bg}; color:${style.color};
-                                     padding: 1px 8px; border-radius: 4px; font-size: 0.72rem;
-                                     font-weight: 700; min-width: 42px; text-align: center;
-                                     flex-shrink: 0; letter-spacing: 0.5px;">
-                            ${style.label}
-                        </span>
-                        <!-- 分类标签 -->
-                        <span style="background:rgba(99,102,241,0.15); color:#818cf8;
-                                     padding: 1px 7px; border-radius: 4px; font-size: 0.72rem;
-                                     font-weight: 500; flex-shrink: 0;">
-                            ${catLabel}
-                        </span>
-                        <!-- 消息 -->
-                        <span style="color:#c9d1d9; word-break: break-word;">
-                            ${escapeHtml(entry.message)}
-                        </span>
-                    </div>
-                    ${detailHtml}
-                `;
-            });
-
-            container.innerHTML = html;
-
-            // 自动滚动到底部（显示最新）
-            container.scrollTop = 0;
-        }
-
-        function renderErrorState() {
-            const container = document.getElementById('logContainer');
-            if (!container) return;
-            container.innerHTML = `
-                <div style="display:flex;align-items:center;justify-content:center;height:200px;color:#f87171;">
-                    <i class="fas fa-exclamation-triangle" style="margin-right:0.5rem;"></i>
-                    获取日志失败，请检查网络连接
-                </div>`;
-        }
-
-        function updateLogStats(total) {
-            const el = document.getElementById('logStats');
-            if (el) el.textContent = `共 ${total} 条日志`;
-        }
-
-        function updateCategoryOptions(categories) {
-            const sel = document.getElementById('logCategoryFilter');
-            if (!sel || !categories) return;
-
-            const currentVal = sel.value;
-            sel.innerHTML = '<option value="">全部分类</option>';
-            categories.forEach(cat => {
-                const label = CATEGORY_LABELS[cat] || cat;
-                sel.innerHTML += `<option value="${cat}">${label}</option>`;
-            });
-            sel.value = currentVal;
-        }
-
-        function filterLogs() {
-            fetchLogs();  // 服务端过滤更高效
-        }
-
-        async function clearLogs() {
-            if (!confirm('确定要清空所有系统日志吗？')) return;
-
-            try {
-                const resp = await fetch('/api/logs/clear', { method: 'POST' });
-                const result = await resp.json();
-
-                if (result.success) {
-                    _allLogsCache = [];
-                    renderLogs([]);
-                    updateLogStats(0);
-                    showToast('日志已清空', 'success');
-                }
-            } catch (e) {
-                showToast('清空失败: ' + e.message, 'error');
-            }
-        }
-
-        function toggleAutoRefresh() {
-            const checked = document.getElementById('logAutoRefresh')?.checked;
-
-            if (_logAutoRefreshTimer) {
-                clearInterval(_logAutoRefreshTimer);
-                _logAutoRefreshTimer = null;
-            }
-
-            if (checked) {
-                _logAutoRefreshTimer = setInterval(fetchLogs, 5000);
-            }
-        }
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // 日志淡入动画 CSS（动态注入）
-        (function() {
-            const style = document.createElement('style');
-            style.textContent = `
-                @keyframes logFadeIn {
-                    from { opacity: 0; transform: translateX(-12px); }
-                    to   { opacity: 1; transform: translateX(0); }
-                }
-            `;
-            document.head.appendChild(style);
-        })();
-
-        // 页面加载后如果当前在日志 tab 则自动启动刷新
-        (function initLogPanel() {
-            document.addEventListener('DOMContentLoaded', () => {
-                // 延迟初始化，避免阻塞
-                setTimeout(() => {
-                    if (document.getElementById('logAutoRefresh')?.checked) {
-                        _logAutoRefreshTimer = setInterval(fetchLogs, 5000);
-                    }
-                }, 1000);
-            });
-        })();
-
         // ==================== 🛡️ 节点安全防护面板 JavaScript ====================
         const SecurityPanel = {
             // API 基础路径
@@ -8966,74 +8732,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         }
     </script>
     
-    <!-- 自定义模型对话框 -->
-    <div id="customModelDialog" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999; justify-content:center; align-items:center;">
-        <div style="background:white; border-radius:16px; padding:2rem; width:90%; max-width:600px; max-height:85vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; padding-bottom:1rem; border-bottom:2px solid var(--gray-200);">
-                <h3 id="customModelDialogTitle" style="margin:0; color:var(--primary); font-size:1.4rem;">
-                    <i class="fas fa-cube"></i> 添加自定义模型
-                </h3>
-                <button onclick="hideCustomModelDialog()" style="background:none; border:none; font-size:1.5rem; cursor:pointer; color:var(--gray-500); padding:0.5rem;">&times;</button>
-            </div>
-            
-            <form id="customModelForm" onsubmit="saveCustomModel(event)" style="display:flex; flex-direction:column; gap:1rem;">
-                <div class="form-group">
-                    <label><i class="fas fa-tag"></i> 模型ID <span style="color:var(--danger);">*</span></label>
-                    <input type="text" id="customModelId" required placeholder="如: my-custom-model, llama-3.1-8b"
-                           style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
-                    <small style="color:var(--gray-500);">唯一标识符，用于系统内部引用</small>
-                </div>
-                
-                <div class="form-group">
-                    <label><i class="fas fa-font"></i> 显示名称</label>
-                    <input type="text" id="customPrettyName" placeholder="如: My Custom Model, Llama 3.1 8B"
-                           style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
-                    <small style="color:var(--gray-500);">友好的显示名称（可选）</small>
-                </div>
-                
-                <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
-                    <div class="form-group">
-                        <label><i class="fas fa-layer-group"></i> 层数</label>
-                        <input type="number" id="customLayers" placeholder="如: 32, 28, 16" min="1" max="256"
-                               style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
-                        <small style="color:var(--gray-500);">模型的层数</small>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label><i class="fas fa-cog"></i> 引擎类型</label>
-                        <select id="customEngineType"
-                                style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;">
-                            <option value="">-- 从配置文件加载 --</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label><i class="fas fa-database"></i> 模型仓库路径 <span style="color:var(--danger);">*</span></label>
-                    <input type="text" id="customRepo" required 
-                           placeholder="如: meta-llama/Llama-3.1-8B, Qwen/Qwen3-4B, ./local-models/my-model"
-                           style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
-                    <small style="color:var(--gray-500);">
-                        HuggingFace 仓库路径或本地路径<br>
-                        示例: meta-llama/Llama-3.1-8B, unsloth/Llama-3.2-1B-Instruct
-                    </small>
-                </div>
-                
-                <div style="display:flex; gap:0.75rem; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--gray-200);">
-                    <button type="button" onclick="hideCustomModelDialog()"
-                            style="flex:1; padding:0.75rem; background:var(--gray-200); color:var(--gray-700); border:none; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:600;">
-                        取消
-                    </button>
-                    <button type="submit" id="btnSaveCustomModel"
-                            style="flex:1; padding:0.75rem; background:linear-gradient(135deg, #10b981 0%, #059669 100%); color:white; border:none; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:600;">
-                        <i class="fas fa-save"></i> 保存
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-    
-    <!-- 自定义模型列表面板 -->
+    <!-- 自定义模型统一管理面板 -->
     <div id="customModelsListPanel" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index:9999; justify-content:center; align-items:center;">
         <div style="background:white; border-radius:16px; padding:2rem; width:90%; max-width:900px; max-height:85vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3);">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem; padding-bottom:1rem; border-bottom:2px solid var(--gray-200);">
@@ -9041,14 +8740,113 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     <i class="fas fa-list-alt"></i> 自定义模型管理
                 </h3>
                 <div style="display:flex; gap:0.5rem;">
-                    <button onclick="showCustomModelDialog('add')" 
-                            class="btn btn-sm" style="padding:0.5rem 1rem; background:#10b981; color:white; border:none; border-radius:8px; cursor:pointer;">
-                        <i class="fas fa-plus"></i> 添加
+                    <button type="button" onclick="showCustomModelForm('add')"
+                            class="btn btn-sm btn-success">
+                        <i class="fas fa-plus"></i> 添加模型
                     </button>
                     <button onclick="hideCustomModelsList()" style="background:none; border:none; font-size:1.5rem; cursor:pointer; color:var(--gray-500); padding:0.5rem;">&times;</button>
                 </div>
             </div>
-            
+
+            <!-- 内嵌添加/编辑表单 -->
+            <div id="customModelFormContainer" style="display:none; margin-bottom:1.5rem; padding:1.25rem; background:var(--gray-50); border:1px solid var(--gray-200); border-radius:12px;">
+                <h4 id="customModelDialogTitle" style="margin:0 0 1rem 0; color:var(--primary); font-size:1.1rem;">
+                    <i class="fas fa-cube"></i> 添加自定义模型
+                </h4>
+                <form id="customModelForm" onsubmit="saveCustomModel(event)" style="display:flex; flex-direction:column; gap:1rem;">
+                    <div class="form-group">
+                        <label><i class="fas fa-tag"></i> 模型ID <span style="color:var(--danger);">*</span></label>
+                        <input type="text" id="customModelId" required placeholder="如: my-custom-model, llama-3.1-8b"
+                               style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                        <small style="color:var(--gray-500);">唯一标识符，用于系统内部引用</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label><i class="fas fa-font"></i> 显示名称</label>
+                        <input type="text" id="customPrettyName" placeholder="如: My Custom Model, Llama 3.1 8B"
+                               style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                        <small style="color:var(--gray-500);">友好的显示名称（可选）</small>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
+                        <div class="form-group">
+                            <label><i class="fas fa-layer-group"></i> 层数</label>
+                            <input type="number" id="customLayers" placeholder="如: 32, 28, 16" min="1" max="256"
+                                   style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                            <small style="color:var(--gray-500);">模型的层数</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fas fa-cog"></i> 引擎类型</label>
+                            <select id="customEngineType"
+                                    style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;">
+                                <option value="">-- 从配置文件加载 --</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem;">
+                        <div class="form-group">
+                            <label><i class="fas fa-memory"></i> 层内存 (MB)</label>
+                            <input type="number" id="customLayerMemoryMB" placeholder="如: 240" min="1"
+                                   style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                            <small style="color:var(--gray-500);">layer_memory_mb</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fas fa-weight-hanging"></i> 参数量 (B)</label>
+                            <input type="number" id="customParamCount" placeholder="如: 2" min="0" step="0.1"
+                                   style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                            <small style="color:var(--gray-500);">param_count</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fas fa-tags"></i> 分类</label>
+                            <select id="customCategory"
+                                    style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem; background:white;">
+                                <option value="general">general</option>
+                                <option value="vision">vision</option>
+                                <option value="agent">agent</option>
+                                <option value="code">code</option>
+                                <option value="math">math</option>
+                                <option value="reasoning">reasoning</option>
+                                <option value="other">other</option>
+                            </select>
+                            <small style="color:var(--gray-500);">category</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fas fa-star-half-alt"></i> 优先级 (0-1)</label>
+                            <input type="number" id="customPriority" placeholder="0.0 - 1.0" min="0" max="1" step="0.1"
+                                   style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                            <small style="color:var(--gray-500);">priority</small>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label><i class="fas fa-database"></i> 模型仓库路径 <span style="color:var(--danger);">*</span></label>
+                        <input type="text" id="customRepo" required
+                               placeholder="如: meta-llama/Llama-3.1-8B, Qwen/Qwen3-4B, ./local-models/my-model"
+                               style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                        <small style="color:var(--gray-500);">
+                            HuggingFace 仓库路径或本地路径<br>
+                            示例: meta-llama/Llama-3.1-8B, unsloth/Llama-3.2-1B-Instruct
+                        </small>
+                    </div>
+
+                    <div style="display:flex; gap:0.75rem; margin-top:0.5rem; padding-top:1rem; border-top:1px solid var(--gray-200);">
+                        <button type="button" onclick="hideCustomModelForm()"
+                                style="flex:1; padding:0.75rem; background:var(--gray-200); color:var(--gray-700); border:none; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:600;">
+                            取消
+                        </button>
+                        <button type="submit" id="btnSaveCustomModel"
+                                style="flex:1; padding:0.75rem; background:linear-gradient(135deg, #10b981 0%, #059669 100%); color:white; border:none; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:600;">
+                            <i class="fas fa-save"></i> 保存
+                        </button>
+                    </div>
+                </form>
+            </div>
+
             <div id="customModelsListContainer">
             </div>
         </div>

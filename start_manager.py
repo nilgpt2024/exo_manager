@@ -28,12 +28,29 @@ EXO Cluster Manager - 启动脚本 (增强版)
 
 import sys
 import os
+import json
 import argparse
 import socket
 import asyncio
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_existing_frp_token() -> str:
+    """从已有的 frps.json 配置中读取 token，实现 Manager 重启后 token 不变"""
+    try:
+        config_path = Path.home() / ".exo" / "frp" / "frps.json"
+        if not config_path.exists():
+            return ""
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        token = data.get("auth", {}).get("token", "")
+        if token:
+            return token
+    except Exception:
+        pass
+    return ""
 
 
 def print_banner(host, port, mode, frp_info=None):
@@ -229,15 +246,21 @@ def main():
     frp_info = None
     if args.frp_enable:
         if not args.frp_token:
-            # 自动随机生成 32 位 hex token
-            import secrets
-            args.frp_token = secrets.token_hex(16)  # 32 字符
+            # 尝试复用已有的 frps token，避免 Manager 重启后节点断连
+            existing_token = _load_existing_frp_token()
+            if existing_token:
+                args.frp_token = existing_token
+                print(f"  🔑 FRP Token 已复用已有配置: {args.frp_token[:8]}...{args.frp_token[-4:]}")
+            else:
+                # 自动随机生成 32 位 hex token
+                import secrets
+                args.frp_token = secrets.token_hex(16)  # 32 字符
+                print(f"  🔑 FRP Token 已自动生成: {args.frp_token}")
+                print(f"     ⚠️  请保存此 Token，节点连接时需要使用\n")
         frp_info = {
             "token": args.frp_token,
             "bind_port": args.frp_bind_port,
         }
-        print(f"  🔑 FRP Token 已自动生成: {args.frp_token}")
-        print(f"     ⚠️  请保存此 Token，节点连接时需要使用\n")
 
     # 确定启动模式
     if args.config:

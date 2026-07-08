@@ -489,7 +489,7 @@ class AutoAllocTrigger:
         event_type: str = "manual",
         force: bool = False,
         trigger_details: Optional[Dict[str, Any]] = None,
-        skip_loaded_models: bool = False
+        skip_loaded_models: bool = True
     ) -> AllocationEvent:
         """
         评估并执行自动分配（主入口）
@@ -576,6 +576,7 @@ class AutoAllocTrigger:
                             model_id=pending["model"],  # 用短名（如 "qwen-3-4b"）
                             model_path=model_path,  # HF repo ID 在这里
                             n_layers=spec.total_layers,
+                            layer_memory_mb=spec.layer_memory_mb,
                             strategy="smart",
                             auto_instance=True
                         )
@@ -741,6 +742,7 @@ class AutoAllocTrigger:
                                 model_id=model_id,  # 用短名（如 "qwen-3-4b"），而非 HF repo ID
                                 model_path=model_path,  # HF repo ID 在这里（如 "Qwen/Qwen3-4B"）
                                 n_layers=spec.total_layers,  # 使用 total_layers 而不是 n_layers
+                                layer_memory_mb=spec.layer_memory_mb,
                                 strategy="smart",  # 智能策略：单节点优先
                                 auto_instance=True  # 自动生成实例ID（支持多实例）
                             )

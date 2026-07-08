@@ -1923,7 +1923,8 @@ class EXOClusterManager:
         strategy: str = "smart",
         target_nodes: Optional[List[str]] = None,
         instance_id: Optional[str] = None,
-        auto_instance: bool = False
+        auto_instance: bool = False,
+        layer_memory_mb: Optional[float] = None
     ) -> Dict:
         """
         将模型加载到集群（核心方法）- 支持多实例
@@ -1943,6 +1944,7 @@ class EXOClusterManager:
             target_nodes: 指定目标节点列表（可选，默认使用所有在线节点）
             instance_id: 实例ID（支持多实例，None表示默认）
             auto_instance: 是否自动生成实例ID
+            layer_memory_mb: 每层预估显存(MB)，未指定时从模型库自动获取
             
         Returns:
             加载结果详情
@@ -1959,6 +1961,7 @@ class EXOClusterManager:
             await manager.load_model_to_cluster("qwen3-0.6b", "./models", auto_instance=True)
         """
         from gpu_pool_integration import GPUPoolIntegration
+        from auto_model_allocator import get_model_library
         
         # 处理 instance_id
         if auto_instance and instance_id is None:
@@ -1972,7 +1975,25 @@ class EXOClusterManager:
         # 构建完整模型ID用于内部管理
         full_model_id = f"{model_id}" if instance_id == "default" else f"{model_id}::{instance_id}"
         
-        logger.info(f"🚀 开始加载模型到集群: {model_id} (实例: {instance_id})")
+        # 自动获取每层显存估算（如果调用方未提供）
+        if layer_memory_mb is None:
+            base_model_id = model_id.split("::")[0] if "::" in model_id else model_id
+            model_lib = get_model_library()
+            spec = model_lib.get(base_model_id)
+            if not spec:
+                # 尝试用 HF repo ID 反向查找
+                for key, lib_spec in model_lib.items():
+                    if lib_spec.model_id == base_model_id:
+                        spec = lib_spec
+                        break
+            if spec:
+                layer_memory_mb = spec.layer_memory_mb
+                logger.info(f"🔍 [ModelLoad] 从模型库获取 {base_model_id} 每层显存: {layer_memory_mb}MB")
+            else:
+                layer_memory_mb = 100.0
+                logger.warning(f"⚠️ [ModelLoad] 模型库中未找到 {base_model_id}，使用默认每层显存 {layer_memory_mb}MB")
+        
+        logger.info(f"🚀 开始加载模型到集群: {model_id} (实例: {instance_id}, 每层{layer_memory_mb}MB)")
         
         pool = GPUPoolIntegration(self)
         
@@ -1981,6 +2002,7 @@ class EXOClusterManager:
             allocation = await pool.preview_allocation(
                 model_id=model_id,
                 total_layers=n_layers,
+                layer_memory_mb=layer_memory_mb,
                 strategy=strategy
             )
             
@@ -2011,10 +2033,44 @@ class EXOClusterManager:
                     "success": False,
                     "error": "没有可用的目标节点"
                 }
-            
+
+            # 自动实例模式下，避免在同一节点重复加载同一基础模型
+            base_model_id = model_id.split("::")[0] if "::" in model_id else model_id
+            if auto_instance:
+                deduped_allocs = []
+                for alloc in allocation.allocations:
+                    node_id = alloc["node_id"]
+                    node_info = self.nodes.get(node_id)
+                    already_loaded = False
+                    if node_info and node_info.loaded_models:
+                        for m in node_info.loaded_models:
+                            loaded_id = m.get("model_id", "")
+                            loaded_base = m.get("base_model_id") or (
+                                loaded_id.split("::")[0] if "::" in loaded_id else loaded_id
+                            )
+                            if loaded_base == base_model_id:
+                                already_loaded = True
+                                logger.info(f"🔄 [ModelLoad] 节点 {node_id} 已加载 {base_model_id}，跳过重复实例")
+                                break
+                    if not already_loaded:
+                        deduped_allocs.append(alloc)
+
+                if not deduped_allocs:
+                    logger.info(f"🔄 [ModelLoad] {base_model_id} 已在所有目标节点加载，无需创建新实例")
+                    return {
+                        "success": True,
+                        "model_id": model_id,
+                        "instance_id": instance_id,
+                        "full_model_id": full_model_id,
+                        "message": f"{base_model_id} 已在目标节点加载，跳过重复实例",
+                        "load_results": []
+                    }
+
+                allocation.allocations = deduped_allocs
+
             results = []
             for alloc in allocation.allocations:
-                node_id = alloc["node_id"]
+                node_id = alloc['node_id']
                 connector = self.connectors.get(node_id)
                 
                 if not connector:

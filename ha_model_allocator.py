@@ -495,7 +495,7 @@ class HAModelAllocator:
 
             for idx, node in candidate_nodes:
                 available = node_free.get(node.node_id, 0)
-                needed = model_spec.total_memory_mb
+                needed = model_spec.runtime_memory_mb
 
                 if available < needed:
                     continue
@@ -552,7 +552,7 @@ class HAModelAllocator:
                     continue
 
                 available = node_free.get(node.node_id, 0)
-                needed = model_spec.total_memory_mb
+                needed = model_spec.runtime_memory_mb
 
                 if available < needed:
                     continue
@@ -602,12 +602,12 @@ class HAModelAllocator:
                 start_layer=0,
                 end_layer=model_spec.total_layers - 1,
                 layers_count=model_spec.total_layers,
-                memory_mb=model_spec.total_memory_mb,
+                memory_mb=model_spec.runtime_memory_mb,
             )
             instances.append(primary_inst)
 
             # 更新资源
-            mem = model_spec.total_memory_mb
+            mem = model_spec.runtime_memory_mb
             node_free[primary_node.node_id] -= mem
             node_usage[primary_node.node_id] += mem
             models_on_node[primary_node.node_id].add(model_spec.model_id)
@@ -638,7 +638,7 @@ class HAModelAllocator:
                     start_layer=0,
                     end_layer=model_spec.total_layers - 1,
                     layers_count=model_spec.total_layers,
-                    memory_mb=model_spec.total_memory_mb,
+                    memory_mb=model_spec.runtime_memory_mb,
                 )
                 instances.append(standby_inst)
 

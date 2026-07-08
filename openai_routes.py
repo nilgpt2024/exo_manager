@@ -205,9 +205,9 @@ async def verify_api_key(request: Request) -> Tuple[str, Optional[str]]:
             key_manager = get_api_key_manager()
             if key_manager.validate_key(api_key):
                 user_id = None
-                key_info = key_manager._keys.get(api_key)
-                if key_info and key_info.get("user_id"):
-                    user_id = key_info["user_id"]
+                key_info = key_manager.get_key_info(api_key)
+                if key_info and getattr(key_info, "user_id", None):
+                    user_id = key_info.user_id
                 result = (api_key, user_id)
                 _auth_cache.set(cache_key, result)
                 return result

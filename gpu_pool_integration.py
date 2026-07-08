@@ -78,6 +78,9 @@ class SmartAllocator:
     SAFE_RATIO = 0.70      # 安全线：模型大小 ≤ 节点显存 × 70%
     WARNING_RATIO = 0.90   # 警告线：模型大小 ≤ 节点显存 × 90%
 
+    # 运行时开销系数：除权重外，需额外预留 KV Cache / 激活值 / CUDA 碎片 / 临时缓冲区等
+    RUNTIME_OVERHEAD_RATIO = 1.30
+
     def __init__(self, manager):
         self.manager = manager
 
@@ -122,19 +125,42 @@ class SmartAllocator:
         return nodes
 
     def _estimate_node_used_memory(self, node_id: str) -> float:
-        """估算某节点已被模型占用的显存"""
+        """估算某节点已被模型占用的显存（按模型库中各模型配置的每层显存计算）"""
         node_info = self.manager.nodes.get(node_id)
         if not node_info:
             return 0.0
+
+        # 动态导入避免循环依赖
+        from auto_model_allocator import get_model_library
+        model_lib = get_model_library()
 
         total_used = 0.0
         for model in node_info.loaded_models:
             shard = model.get("shard", {})
             n_layers = shard.get("end_layer", 0) - shard.get("start_layer", 0) + 1
-            # 每层按 100MB 估算（可配置）
-            total_used += n_layers * 100
 
-        # 如果有 pynvml 实时数据，优先使用
+            # 根据 base_model_id 查找模型库中的每层显存配置
+            model_id = model.get("model_id", "")
+            base_model_id = model.get("base_model_id") or (
+                model_id.split("::")[0] if "::" in model_id else model_id
+            )
+            layer_mem = 100.0  # 默认回退
+            spec = model_lib.get(base_model_id)
+            if not spec:
+                # 尝试用 HF repo ID 反向查找
+                for key, lib_spec in model_lib.items():
+                    if lib_spec.model_id == base_model_id:
+                        spec = lib_spec
+                        break
+            if spec:
+                # 使用运行时每层显存（含 KV Cache / 激活值 / 碎片开销）
+                layer_mem = spec.runtime_memory_mb / max(spec.total_layers, 1)
+            else:
+                layer_mem = 100.0 * 1.30  # 默认回退并带开销
+
+            total_used += n_layers * layer_mem
+
+        # 如果有 pynvml 实时数据，优先使用（真实占用通常更高）
         mem_detail = node_info.device_info.get("memory_detail")
         if mem_detail and mem_detail.get("used", 0) > total_used:
             return mem_detail["used"]
@@ -165,7 +191,8 @@ class SmartAllocator:
         total_layers: int,
         layer_memory_mb: float = 100.0,
         strategy: str = "smart",
-        force_shard: bool = False
+        force_shard: bool = False,
+        nodes: Optional[List[Dict]] = None
     ) -> ModelAllocation:
         """
         智能分配入口（同步版本，供 preview 使用）
@@ -176,20 +203,25 @@ class SmartAllocator:
             layer_memory_mb: 每层预估显存(MB)
             strategy: 分配策略 ('smart' | 'memory_weighted' | 'uniform' | 'performance_weighted')
             force_shard: 强制拆分（跳过单节点检查）
+            nodes: 可选的外部节点列表（用于模拟分配），不传则使用当前在线节点
 
         Returns:
             ModelAllocation 包含完整的分配方案和决策元信息
         """
-        nodes = self.get_nodes_with_usage()
+        if nodes is None:
+            nodes = self.get_nodes_with_usage()
         if not nodes:
             raise ValueError("没有可用的在线节点")
 
-        model_total_mb = total_layers * layer_memory_mb
+        # 计入运行时开销：KV Cache / 激活值 / CUDA 碎片 / 临时缓冲区等
+        effective_layer_mb = layer_memory_mb * self.RUNTIME_OVERHEAD_RATIO
+        model_total_mb = total_layers * effective_layer_mb
         max_node_mem = max(n["memory_mb"] for n in nodes) if nodes else 0
         max_free_mem = max(n["free_mb"] for n in nodes) if nodes else 0
         total_free_mem = sum(n["free_mb"] for n in nodes)
 
-        logger.info(f"🧠 [SmartAlloc] 模型 {model_id}: {model_total_mb/1024:.1f}GB, "
+        logger.info(f"🧠 [SmartAlloc] 模型 {model_id}: {model_total_mb/1024:.1f}GB "
+                   f"(含{self.RUNTIME_OVERHEAD_RATIO*100-100:.0f}%运行时开销), "
                    f"{total_layers}层, 可用节点={len(nodes)}, "
                    f"最大节点显存={max_node_mem/1024:.1f}GB, "
                    f"最大剩余={max_free_mem/1024:.1f}GB, 总剩余={total_free_mem/1024:.1f}GB")
@@ -199,7 +231,7 @@ class SmartAllocator:
 
             # Phase 1: 尝试单节点完整加载
             single_result = self._try_single_node_allocation(
-                nodes, model_id, total_layers, model_total_mb, layer_memory_mb
+                nodes, model_id, total_layers, model_total_mb, effective_layer_mb
             )
             if single_result:
                 return single_result
@@ -208,7 +240,7 @@ class SmartAllocator:
             logger.info(f"🧠 [SmartAlloc] 单节点不可行，切换到拆分策略")
 
             # 计算至少需要多少节点（每个节点至少能放1层 + 余量）
-            per_node_need = layer_memory_mb * 1.15  # 每节点至少1层+余量
+            per_node_need = effective_layer_mb * 1.15  # 每节点至少1层+余量
             min_nodes = max(2, int(model_total_mb * 1.15 / max(n["free_mb"] for n in nodes)) + 1)
 
             if total_free_mem < model_total_mb * 1.15:  # 留15%余量
@@ -231,13 +263,13 @@ class SmartAllocator:
 
         # ====== 传统拆分策略 ======
         sharded_allocations = self._allocate_sharded(
-            nodes, total_layers, layer_memory_mb, strategy
+            nodes, total_layers, effective_layer_mb, strategy
         )
 
         estimated_memory = {}
         for alloc in sharded_allocations:
             estimated_memory[alloc["node_id"]] = round(
-                alloc["layers_count"] * layer_memory_mb / 1024, 2
+                alloc["layers_count"] * effective_layer_mb / 1024, 2
             )
 
         level, reason = self.classify_model(model_total_mb, max_free_mem)
@@ -932,12 +964,39 @@ class GPUPoolIntegration:
         logger.info(f"🎮 [GPU Pool] 可用节点: {len(available)}/{len(self.manager.nodes)}")
         return available
     
+    def _build_simulated_nodes(self, simulated_nodes: List[Dict]) -> List[Dict]:
+        """
+        根据用户输入构造模拟节点列表（用于预览分配）
+
+        Args:
+            simulated_nodes: 每个元素包含 memory_gb（节点显存，单位 GB）
+
+        Returns:
+            符合 SmartAllocator 要求的节点字典列表
+        """
+        nodes = []
+        for idx, spec in enumerate(simulated_nodes):
+            memory_gb = float(spec.get("memory_gb", 16))
+            memory_mb = memory_gb * 1024
+            nodes.append({
+                "node_id": f"sim-node-{idx + 1}",
+                "address": f"sim-{idx + 1}",
+                "memory_mb": memory_mb,
+                "used_mb": 0,
+                "free_mb": memory_mb,
+                "loaded_models": 0,
+                "device": "Simulated",
+                "flops": {}
+            })
+        return nodes
+
     async def preview_allocation(
         self,
         model_id: str,
         total_layers: int,
         layer_memory_mb: float = 100.0,
-        strategy: str = "smart"
+        strategy: str = "smart",
+        simulated_nodes: Optional[List[Dict]] = None
     ) -> ModelAllocation:
         """
         预览模型分片分配方案
@@ -951,6 +1010,8 @@ class GPUPoolIntegration:
                 - 'memory_weighted': 按显存加权（传统，始终拆分）
                 - 'uniform':        均匀分配（传统，始终拆分）
                 - 'performance_weighted': 按性能加权（传统，始终拆分）
+            simulated_nodes: 可选的模拟节点列表，用于离线场景下模拟分配；
+                             提供时优先使用模拟节点，否则使用当前在线节点
 
         Returns:
             分配方案对象 (ModelAllocation)，包含 allocation_type / decision_reason 等元信息
@@ -958,13 +1019,20 @@ class GPUPoolIntegration:
         # 使用智能分配器
         allocator = SmartAllocator(self.manager)
 
+        nodes = None
+        is_simulation = False
+        if simulated_nodes:
+            nodes = self._build_simulated_nodes(simulated_nodes)
+            is_simulation = True
+
         if strategy == "smart":
             # 智能策略：自动判断单节点 or 拆分
             result = allocator.allocate(
                 model_id=model_id,
                 total_layers=total_layers,
                 layer_memory_mb=layer_memory_mb,
-                strategy="smart"
+                strategy="smart",
+                nodes=nodes
             )
         else:
             # 传统策略：用户明确选择时走原有逻辑（但通过 allocator 统一处理）
@@ -973,8 +1041,12 @@ class GPUPoolIntegration:
                 total_layers=total_layers,
                 layer_memory_mb=layer_memory_mb,
                 strategy=strategy,
-                force_shard=True   # 非 smart 策略强制拆分，保持向后兼容
+                force_shard=True,   # 非 smart 策略强制拆分，保持向后兼容
+                nodes=nodes
             )
+
+        if is_simulation:
+            result.decision_reason = "[模拟节点] " + result.decision_reason
 
         alloc_type_label = {
             "single_node": "单节点完整加载",
