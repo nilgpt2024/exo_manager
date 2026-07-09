@@ -1417,13 +1417,55 @@ class EXOClusterManager:
         
         return candidate_id
     
+    async def _wait_for_instance_loaded(
+        self,
+        full_model_id: str,
+        base_model_id: str,
+        timeout: float = 120.0,
+        check_interval: float = 1.0,
+        initial_grace_period: float = 3.0
+    ) -> bool:
+        """
+        等待模型实例真正加载完成（通过节点 loaded_models 状态确认）。
+
+        批量加载多实例时，必须等前一个实例广播 loaded_models 后再创建下一个，
+        否则去重逻辑会失效，导致同一节点重复加载相同模型。
+        """
+        import asyncio
+        start_time = time.time()
+
+        # 初始宽限期：给节点留出开始加载和广播状态的时间
+        if initial_grace_period > 0:
+            await asyncio.sleep(initial_grace_period)
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                logger.warning(
+                    f"⏰ [ClusterCore] 等待实例加载确认超时: {full_model_id} ({timeout:.0f}s)"
+                )
+                return False
+
+            for node_info in self.nodes.values():
+                if node_info.status.value != "online":
+                    continue
+                for model in node_info.loaded_models:
+                    mid = model.get("model_id", "")
+                    if mid == full_model_id or mid.startswith(f"{base_model_id}::"):
+                        logger.info(
+                            f"✅ [ClusterCore] 实例加载确认: {mid} 已在节点 {node_info.node_id}"
+                        )
+                        return True
+
+            await asyncio.sleep(check_interval)
+
     def get_model_instances(self, model_id: str) -> List[Dict[str, Any]]:
         """
         获取模型的所有实例信息
-        
+
         Args:
             model_id: 模型ID
-            
+
         Returns:
             实例信息列表
         """
@@ -2305,15 +2347,39 @@ class EXOClusterManager:
             }
         """
         logger.info(f"🚀 [BatchLoad] 开始批量加载 {count} 个实例: {model_id}")
-        
+
+        base_model_id = model_id.split("::")[0] if "::" in model_id else model_id
         instances_results = []
         success_count = 0
         failed_count = 0
-        
+
         for i in range(1, count + 1):
             try:
+                # 若当前已存在足够实例，直接跳过剩余循环
+                existing_instances = self.get_model_instances(base_model_id)
+                if len(existing_instances) >= count:
+                    logger.info(
+                        f"🔄 [BatchLoad] {base_model_id} 已存在 {len(existing_instances)} "
+                        f"个实例，满足请求数量 {count}，停止继续创建"
+                    )
+                    # 把已存在实例补充到结果中
+                    for inst in existing_instances:
+                        if not any(r.get("full_model_id") == inst["full_model_id"] for r in instances_results):
+                            instances_results.append({
+                                "instance_id": inst["instance_id"],
+                                "full_model_id": inst["full_model_id"],
+                                "success": True,
+                                "allocation": inst.get("shard"),
+                                "inference_url": "",
+                                "first_layer_node_id": inst.get("node_id"),
+                                "error": None,
+                                "note": "已存在实例"
+                            })
+                            success_count += 1
+                    break
+
                 logger.info(f"  📦 [{i}/{count}] 正在创建第 {i} 个实例...")
-                
+
                 # ✅ 每次调用都使用 auto_instance=True，让系统自动生成唯一ID
                 result = await self.load_model_to_cluster(
                     model_id=model_id,
@@ -2324,7 +2390,7 @@ class EXOClusterManager:
                     instance_id=None,       # 不指定，让系统自动分配
                     auto_instance=True      # ✅ 启用自动生成（带冲突检测）
                 )
-                
+
                 instance_info = {
                     "instance_id": result.get("instance_id", f"unknown-{i}"),
                     "full_model_id": result.get("full_model_id", f"{model_id}::unknown-{i}"),
@@ -2334,16 +2400,27 @@ class EXOClusterManager:
                     "first_layer_node_id": result.get("first_layer_node_id"),  # 首层节点ID
                     "error": result.get("error")
                 }
-                
+
                 instances_results.append(instance_info)
-                
+
                 if result.get("success"):
                     success_count += 1
                     logger.info(f"  ✓ [{i}/{count}] 实例 {instance_info['instance_id']} 创建成功")
+
+                    # 🛡️ 关键修复：等待实例真正加载完成并广播 loaded_models 后，
+                    # 再进行下一轮循环。否则去重逻辑无法感知该实例，导致同一节点重复加载。
+                    if i < count and instance_info.get("full_model_id"):
+                        await self._wait_for_instance_loaded(
+                            full_model_id=instance_info["full_model_id"],
+                            base_model_id=base_model_id,
+                            timeout=120.0,
+                            check_interval=1.0,
+                            initial_grace_period=2.0
+                        )
                 else:
                     failed_count += 1
                     logger.warning(f"  ✗ [{i}/{count}] 实例 #{i} 失败: {result.get('error')}")
-                
+
             except Exception as e:
                 failed_count += 1
                 error_msg = str(e)
@@ -2354,7 +2431,7 @@ class EXOClusterManager:
                     "error": error_msg
                 })
                 logger.error(f"  ✗ [{i}/{count}] 实例 #{i} 异常: {error_msg}")
-            
+
             # 实例间添加小延迟，避免并发冲突
             if i < count:
                 await asyncio.sleep(0.2)
