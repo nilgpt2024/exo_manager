@@ -54,6 +54,33 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 
+# ==================== 工具函数 ====================
+
+def _estimate_message_tokens(content: Union[str, List[Dict[str, Any]], None]) -> int:
+    """安全估算单条消息内容的 token 数，兼容字符串/列表/None。
+
+    OpenAI 兼容格式中 content 既可以是字符串，也可以是包含多模态内容的
+    列表（如 [{"type": "text", "text": "..."}, {"type": "image_url", ...}]）。
+    """
+    if content is None:
+        return 0
+    if isinstance(content, str):
+        return int(len(content.split()) * 1.3)
+
+    # content 为列表时，优先提取 text 类型字段做估算
+    text_parts = []
+    for item in content:
+        if isinstance(item, dict):
+            text_value = item.get("text")
+            if isinstance(text_value, str):
+                text_parts.append(text_value)
+    combined = " ".join(text_parts)
+    if combined:
+        return int(len(combined.split()) * 1.3)
+    # 兜底：将整个列表按字符串长度估算
+    return int(len(str(content).split()) * 1.3)
+
+
 # ==================== 认证/额度结果缓存 ====================
 # 避免每次请求都查 SQLite，减少首 token 延迟 10-50ms
 
@@ -552,7 +579,7 @@ async def _proxy_to_node(
                 asyncio.create_task(_async_deduct_quota(user_id, total_tokens_used + 100, model_id))
 
                 input_tokens_est = sum(
-                    len((m.get("content", "") or "").split()) * 1.3
+                    _estimate_message_tokens(m.get("content"))
                     for m in request_body.get("messages", [])
                 )
                 asyncio.create_task(_record_api_call_stats(
@@ -706,7 +733,7 @@ async def _proxy_to_node(
             if user_id and total_tokens_used > 0:
                 asyncio.create_task(_async_deduct_quota(user_id, total_tokens_used + 100, model_id))
                 input_tokens_est = sum(
-                    len((m.get("content", "") or "").split()) * 1.3
+                    _estimate_message_tokens(m.get("content"))
                     for m in request_body.get("messages", [])
                 )
                 asyncio.create_task(_record_api_call_stats(
@@ -893,7 +920,7 @@ async def _proxy_to_node(
         asyncio.create_task(_async_deduct_quota(user_id, total_tokens_used + 100, model_id))
 
         input_tokens_est = sum(
-            len((m.get("content", "") or "").split()) * 1.3
+            _estimate_message_tokens(m.get("content"))
             for m in request_body.get("messages", [])
         )
         asyncio.create_task(_record_api_call_stats(
@@ -998,7 +1025,7 @@ async def chat_completions(
     quota_mgr = get_quota_manager()
 
     estimated_tokens = sum(
-        len((m.content or "").split()) * 1.3 for m in request.messages
+        _estimate_message_tokens(m.content) for m in request.messages
     ) + (request.max_tokens or 512)
     estimated_tokens = int(estimated_tokens) + 100
 
