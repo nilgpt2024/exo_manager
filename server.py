@@ -2213,11 +2213,15 @@ async def add_custom_model(request: Request):
         logger.error(f"[Models] 添加自定义模型失败: {e}")
         return {"success": False, "error": str(e)}
 
-@app.put("/api/models/custom/{model_id}", response_model=Dict)
-async def update_custom_model(model_id: str, request: Request):
+@app.put("/api/models/custom", response_model=Dict)
+async def update_custom_model(request: Request):
     """更新自定义模型"""
     try:
         data = await request.json()
+        model_id = data.get("model_id", "").strip()
+
+        if not model_id:
+            return {"success": False, "error": "模型ID不能为空"}
 
         if model_id not in custom_model_cards:
             return {"success": False, "error": f"模型 {model_id} 不存在"}
@@ -2265,10 +2269,16 @@ async def update_custom_model(model_id: str, request: Request):
         logger.error(f"[Models] 更新自定义模型失败: {e}")
         return {"success": False, "error": str(e)}
 
-@app.delete("/api/models/custom/{model_id}", response_model=Dict)
-async def delete_custom_model(model_id: str):
+@app.delete("/api/models/custom", response_model=Dict)
+async def delete_custom_model(request: Request):
     """删除自定义模型"""
     try:
+        data = await request.json()
+        model_id = data.get("model_id", "").strip()
+
+        if not model_id:
+            return {"success": False, "error": "模型ID不能为空"}
+
         if model_id not in custom_model_cards:
             return {"success": False, "error": f"模型 {model_id} 不存在"}
         

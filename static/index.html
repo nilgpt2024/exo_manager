@@ -6888,7 +6888,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 保存中...';
 
                 if (mode === 'edit') {
-                    result = await apiCall(`/api/models/custom/${form.dataset.modelId}`, {
+                    result = await apiCall('/api/models/custom', {
                         method: 'PUT',
                         body: JSON.stringify(data)
                     });
@@ -6927,8 +6927,9 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             }
 
             try {
-                const result = await apiCall(`/api/models/custom/${modelId}`, {
-                    method: 'DELETE'
+                const result = await apiCall('/api/models/custom', {
+                    method: 'DELETE',
+                    body: JSON.stringify({ model_id: modelId })
                 });
 
                 if (result && result.success) {
