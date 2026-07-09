@@ -2486,6 +2486,14 @@ function clearSelectedImage() {
 }
 
 // ==================== API Key ====================
+// 当前会话中创建的完整 Key 缓存（maskedKey -> fullKey），页面刷新后清空
+const apiKeyFullCache = new Map();
+
+function maskApiKey(key) {
+    if (!key || key.length <= 12) return '***';
+    return key.slice(0, 8) + '...' + key.slice(-4);
+}
+
 async function loadApiKeys() {
     const listEl = document.getElementById('apiKeyList');
     if (!listEl) return;
@@ -2517,7 +2525,7 @@ async function loadApiKeys() {
                         </div>
                     </div>
                     <div class="key-actions">
-                        <button class="key-action-btn" onclick="copyText('${k.key}')" title="复制"><i class="fas fa-copy"></i></button>
+                        <button class="key-action-btn" onclick="copyApiKeyFromList('${k.key}')" title="复制"><i class="fas fa-copy"></i></button>
                         <button class="key-action-btn danger" onclick="revokeKey('${k.key}')" title="删除"><i class="fas fa-trash"></i></button>
                     </div>
                 </div>
@@ -2542,6 +2550,7 @@ async function createApiKey() {
 
         if (data.key) {
             showToast('✅ Key 创建成功', 'success');
+            apiKeyFullCache.set(maskApiKey(data.key), data.key);
             showApiKeyModal(data.key);
             loadApiKeys();
         } else {
@@ -2567,6 +2576,15 @@ function closeApiKeyModal() {
 function copyApiKeyModalValue() {
     const input = document.getElementById('apiKeyModalValue');
     if (input && input.value) copyText(input.value);
+}
+
+function copyApiKeyFromList(maskedKey) {
+    const fullKey = apiKeyFullCache.get(maskedKey);
+    if (fullKey) {
+        copyText(fullKey);
+    } else {
+        showToast('完整 Key 仅在创建时显示，请重新创建 Key 后复制', 'error');
+    }
 }
 
 document.getElementById('apiKeyModal')?.addEventListener('click', function(e) {
