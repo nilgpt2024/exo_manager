@@ -1300,6 +1300,28 @@
         </div>
     </div>
 
+    <!-- API Key 创建成功弹窗 -->
+    <div id="apiKeyCreateModal" class="modal-overlay">
+        <div class="modal" style="max-width: 520px;">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fas fa-check-circle" style="color: var(--success);"></i> API Key 创建成功</h3>
+                <button class="close-btn" onclick="closeApiKeyCreateModal()">&times;</button>
+            </div>
+            <div style="margin-bottom: 1rem; color: var(--gray-600); font-size: 0.9rem; line-height: 1.5;">
+                请<strong style="color: var(--gray-800);">立即复制并保存</strong>下面的完整 Key。关闭弹窗后列表中仅显示脱敏后的 Key，无法再次查看完整内容。
+            </div>
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem;">
+                <input type="text" id="apiKeyCreateModalValue" class="form-input" style="font-family: monospace; flex: 1;" readonly>
+                <button class="btn btn-primary" onclick="copyApiKeyCreateModalValue()">
+                    <i class="fas fa-copy"></i> 复制
+                </button>
+            </div>
+            <div style="display: flex; justify-content: flex-end;">
+                <button class="btn btn-outline" onclick="closeApiKeyCreateModal()">我知道了</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Main Content -->
     <main class="container">
         <!-- 顶层 Tab 导航 -->
@@ -6374,8 +6396,16 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         }
 
         // ==================== API Key 管理功能 ====================
+        // 当前会话中创建的完整 Key 缓存（maskedKey -> fullKey），页面刷新后清空
+        const apiKeyFullCache = new Map();
+
         function getApiKeyEndpoint() {
             return (currentUser && currentUser.role === 'admin') ? '/v1/admin/keys' : '/v1/user/keys';
+        }
+
+        function maskApiKey(key) {
+            if (!key || key.length <= 12) return '***';
+            return key.slice(0, 8) + '...' + key.slice(-4);
         }
 
         async function loadApiKeys() {
@@ -6444,7 +6474,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                                 </div>
                             </div>
                             <div style="display: flex; gap: 0.5rem;">
-                                <button onclick="copyToClipboard('${key.key}')" class="btn btn-outline btn-sm" title="复制">
+                                <button onclick="copyApiKeyFromList('${key.key}')" class="btn btn-outline btn-sm" title="复制">
                                     <i class="fas fa-copy"></i>
                                 </button>
                                 <button onclick="revokeApiKey('${key.key}')" class="btn btn-danger btn-sm" title="吊销">
@@ -6675,7 +6705,9 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 const data = await res.json();
 
                 if (data.success || data.key) {
-                    showToast(`API Key 生成成功: ${data.key.substring(0, 16)}...`, 'success');
+                    showToast(`API Key 生成成功`, 'success');
+                    apiKeyFullCache.set(maskApiKey(data.key), data.key);
+                    showApiKeyCreateModal(data.key);
                     loadApiKeys();
                 } else {
                     showToast(data.message || '生成失败', 'error');
@@ -6706,12 +6738,61 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
         }
 
         function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showToast('已复制到剪贴板', 'success');
-            }).catch(() => {
-                showToast('复制失败', 'error');
-            });
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => {
+                    showToast('已复制到剪贴板', 'success');
+                }).catch(() => {
+                    fallbackCopyToClipboard(text);
+                });
+            } else {
+                fallbackCopyToClipboard(text);
+            }
         }
+
+        function fallbackCopyToClipboard(text) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                const ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                showToast(ok ? '已复制到剪贴板' : '复制失败', ok ? 'success' : 'error');
+            } catch (e) {
+                document.body.removeChild(ta);
+                showToast('复制失败', 'error');
+            }
+        }
+
+        function showApiKeyCreateModal(key) {
+            const input = document.getElementById('apiKeyCreateModalValue');
+            if (input) input.value = key;
+            document.getElementById('apiKeyCreateModal').classList.add('active');
+        }
+
+        function closeApiKeyCreateModal() {
+            document.getElementById('apiKeyCreateModal').classList.remove('active');
+        }
+
+        function copyApiKeyCreateModalValue() {
+            const input = document.getElementById('apiKeyCreateModalValue');
+            if (input && input.value) copyToClipboard(input.value);
+        }
+
+        function copyApiKeyFromList(maskedKey) {
+            const fullKey = apiKeyFullCache.get(maskedKey);
+            if (fullKey) {
+                copyToClipboard(fullKey);
+            } else {
+                showToast('完整 Key 仅在创建时显示，请重新生成 Key 后复制', 'error');
+            }
+        }
+
+        document.getElementById('apiKeyCreateModal').addEventListener('click', function(e) {
+            if (e.target === this) closeApiKeyCreateModal();
+        });
 
         // ==================== 自定义模型管理 ====================
 

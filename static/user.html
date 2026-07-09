@@ -1042,6 +1042,95 @@
 
         @keyframes toastIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
 
+        /* API Key 创建成功弹窗 */
+        .apikey-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.45);
+            z-index: 10000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .apikey-modal-overlay.active { display: flex; }
+        .apikey-modal {
+            background: white;
+            border-radius: 18px;
+            width: 100%;
+            max-width: 520px;
+            box-shadow: 0 24px 60px rgba(0,0,0,0.2);
+            overflow: hidden;
+            animation: modalIn 0.25s ease-out;
+        }
+        @keyframes modalIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+        .apikey-modal-header {
+            padding: 1.25rem 1.5rem;
+            background: linear-gradient(135deg, var(--user-primary) 0%, var(--user-primary-light) 100%);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .apikey-modal-header h4 { font-size: 1.1rem; font-weight: 600; }
+        .apikey-modal-header button {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .apikey-modal-header button:hover { background: rgba(255,255,255,0.35); }
+        .apikey-modal-body { padding: 1.5rem; }
+        .apikey-modal-body p { color: #64748b; font-size: 0.92rem; margin-bottom: 1rem; line-height: 1.5; }
+        .apikey-modal-body p strong { color: var(--user-text); }
+        .apikey-value-wrap {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.25rem;
+        }
+        .apikey-value-wrap input {
+            flex: 1;
+            padding: 0.85rem 1rem;
+            border: 1px solid var(--user-border);
+            border-radius: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.9rem;
+            color: var(--user-text);
+            background: var(--user-bg);
+            outline: none;
+        }
+        .apikey-value-wrap button {
+            padding: 0 1.1rem;
+            background: var(--user-primary);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.2s;
+        }
+        .apikey-value-wrap button:hover { background: #0f766e; }
+        .apikey-modal-footer {
+            padding: 0 1.5rem 1.5rem;
+            display: flex;
+            justify-content: flex-end;
+        }
+        .apikey-modal-footer button {
+            padding: 0.65rem 1.4rem;
+            border-radius: 10px;
+            border: none;
+            background: var(--user-bg);
+            color: var(--user-text);
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        .apikey-modal-footer button:hover { background: var(--user-border); }
+
         /* 响应式 */
         @media (max-width: 768px) {
             .sidebar { display: none; }
@@ -2073,6 +2162,26 @@
 <!-- Toast 容器 -->
 <div class="toast-container" id="toastContainer"></div>
 
+<!-- API Key 创建成功弹窗 -->
+<div class="apikey-modal-overlay" id="apiKeyModal">
+    <div class="apikey-modal">
+        <div class="apikey-modal-header">
+            <h4><i class="fas fa-check-circle"></i> API Key 创建成功</h4>
+            <button onclick="closeApiKeyModal()" title="关闭"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="apikey-modal-body">
+            <p>请<strong>立即复制并保存</strong>下面的 Key，关闭弹窗后列表中将只显示脱敏后的 Key，无法再次查看完整内容。</p>
+            <div class="apikey-value-wrap">
+                <input type="text" id="apiKeyModalValue" readonly>
+                <button onclick="copyApiKeyModalValue()" title="复制"><i class="fas fa-copy"></i> 复制</button>
+            </div>
+        </div>
+        <div class="apikey-modal-footer">
+            <button onclick="closeApiKeyModal()">我知道了</button>
+        </div>
+    </div>
+</div>
+
 <script>
 let currentUser = null;
 let availableModels = [];
@@ -2378,8 +2487,23 @@ function clearSelectedImage() {
 
 // ==================== API Key ====================
 async function loadApiKeys() {
+    const listEl = document.getElementById('apiKeyList');
+    if (!listEl) return;
+
     try {
         const res = await fetch('/v1/user/keys', { credentials: 'include' });
+        const data = await res.json();
+
+        if (!data.data || !data.data.length) {
+            listEl.innerHTML = `
+                <div class="empty-keys">
+                    <i class="fas fa-key"></i>
+                    <p>暂无 API Key</p>
+                    <p style="font-size:0.8rem;">点击上方按钮创建你的第一个 Key</p>
+                </div>
+            `;
+            return;
+        }
 
         let html = '';
         data.data.forEach(k => {
@@ -2418,6 +2542,7 @@ async function createApiKey() {
 
         if (data.key) {
             showToast('✅ Key 创建成功', 'success');
+            showApiKeyModal(data.key);
             loadApiKeys();
         } else {
             showToast(data.message || '创建失败', 'error');
@@ -2426,6 +2551,27 @@ async function createApiKey() {
         showToast('网络错误', 'error');
     }
 }
+
+function showApiKeyModal(key) {
+    const input = document.getElementById('apiKeyModalValue');
+    if (input) input.value = key;
+    const modal = document.getElementById('apiKeyModal');
+    if (modal) modal.classList.add('active');
+}
+
+function closeApiKeyModal() {
+    const modal = document.getElementById('apiKeyModal');
+    if (modal) modal.classList.remove('active');
+}
+
+function copyApiKeyModalValue() {
+    const input = document.getElementById('apiKeyModalValue');
+    if (input && input.value) copyText(input.value);
+}
+
+document.getElementById('apiKeyModal')?.addEventListener('click', function(e) {
+    if (e.target === this) closeApiKeyModal();
+});
 
 async function revokeKey(key) {
     if (!confirm('确定要删除此 Key 吗？')) return;
