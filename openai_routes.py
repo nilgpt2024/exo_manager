@@ -176,6 +176,7 @@ class ChatCompletionRequest(BaseModel):
     presence_penalty: Optional[float] = Field(0, ge=-2, le=2)
     frequency_penalty: Optional[float] = Field(0, ge=-2, le=2)
     user: Optional[str] = Field(None, description="用户标识")
+    enable_thinking: Optional[bool] = Field(None, description="是否启用模型思考模式（如 Qwen3）")
 
 
 class CompletionRequest(BaseModel):
@@ -190,6 +191,7 @@ class CompletionRequest(BaseModel):
     presence_penalty: Optional[float] = Field(0, ge=-2, le=2)
     frequency_penalty: Optional[float] = Field(0, ge=-2, le=2)
     user: Optional[str] = Field(None, description="用户标识")
+    enable_thinking: Optional[bool] = Field(None, description="是否启用模型思考模式（如 Qwen3）")
 
 
 class AddQuotaRequest(BaseModel):
@@ -1129,6 +1131,8 @@ async def completions(
         "temperature": request.temperature or 0.7,
         "top_p": request.top_p or 0.9,
     }
+    if request.enable_thinking is not None:
+        request_body["enable_thinking"] = request.enable_thinking
     request_id = f"proxy_{uuid.uuid4().hex[:12]}"
 
     return StreamingResponse(
