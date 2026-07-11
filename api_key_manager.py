@@ -22,7 +22,8 @@ EXO Cluster Manager - API Key 管理模块
             "last_used_at": 1234567900,
             "is_active": true,
             "permissions": ["chat", "completions"],
-            "allowed_models": ["*"]  // ["*"] 表示所有模型
+            "allowed_models": ["*"],  // ["*"] 表示所有模型
+            "user_id": "user_uuid"   // 关联的用户 ID（可选）
         }
     ]
 }
@@ -55,6 +56,7 @@ class APIKey:
     permissions: List[str] = field(default_factory=lambda: ["*"])
     allowed_models: List[str] = field(default_factory=lambda: ["*"])
     usage_count: int = 0
+    user_id: Optional[str] = None
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -129,7 +131,8 @@ class APIKeyManager:
         name: str = "",
         description: str = "",
         permissions: Optional[List[str]] = None,
-        allowed_models: Optional[List[str]] = None
+        allowed_models: Optional[List[str]] = None,
+        user_id: Optional[str] = None
     ) -> str:
         """
         生成新的 API Key
@@ -139,6 +142,7 @@ class APIKeyManager:
             description: Key 的描述
             permissions: 权限列表，["*"] 表示所有权限
             allowed_models: 允许的模型列表，["*"] 表示所有模型
+            user_id: 关联的用户 ID（可选，普通用户创建时设置）
 
         Returns:
             生成的 API Key 字符串 (包含前缀)
@@ -154,7 +158,8 @@ class APIKeyManager:
             created_at=time.time(),
             is_active=True,
             permissions=permissions or ["*"],
-            allowed_models=allowed_models or ["*"]
+            allowed_models=allowed_models or ["*"],
+            user_id=user_id
         )
 
         self._keys[key_str] = api_key
@@ -215,12 +220,32 @@ class APIKeyManager:
             result.append(info)
         return result
 
-    def revoke_key(self, key: str) -> bool:
+    def list_keys_by_user(self, user_id: str) -> List[Dict]:
+        """
+        列出指定用户的 API Key（返回脱敏后的信息）
+
+        Args:
+            user_id: 用户 ID
+
+        Returns:
+            包含 key 信息的列表，key 值会被部分隐藏
+        """
+        result = []
+        for api_key in self._keys.values():
+            if api_key.user_id != user_id:
+                continue
+            info = api_key.to_dict()
+            info["key"] = self._mask_key(api_key.key)
+            result.append(info)
+        return result
+
+    def revoke_key(self, key: str, user_id: Optional[str] = None) -> bool:
         """
         吊销（删除）API Key
 
         Args:
             key: 完整的 API Key 或脱敏后的 key
+            user_id: 用户 ID（可选），传入时只会删除属于该用户的 key
 
         Returns:
             是否成功删除
@@ -237,6 +262,11 @@ class APIKeyManager:
                     break
 
         if target_key and target_key in self._keys:
+            api_key = self._keys[target_key]
+            # 如果指定了 user_id，则校验 key 归属
+            if user_id is not None and api_key.user_id != user_id:
+                logger.warning(f"用户 {user_id} 尝试删除不属于自己的 API Key: {key[:16]}...")
+                return False
             del self._keys[target_key]
             self._save_keys()
             logger.info(f"吊销 API Key: {key[:16]}...")

@@ -1212,11 +1212,15 @@ async def user_create_api_key(
 ):
     """普通用户创建自己的 API Key"""
     _, user = auth_info
+    if not user:
+        raise HTTPException(status_code=401, detail="需要登录才能创建 API Key")
+
     key_manager = get_api_key_manager()
     new_key = key_manager.generate_key(
         name=request.name,
         description=request.description,
-        allowed_models=request.allowed_models
+        allowed_models=request.allowed_models,
+        user_id=user.id
     )
     return {
         "object": "api_key",
@@ -1225,6 +1229,7 @@ async def user_create_api_key(
         "description": request.description,
         "created_at": int(time.time()),
         "is_active": True,
+        "user_id": user.id,
     }
 
 
@@ -1232,8 +1237,11 @@ async def user_create_api_key(
 async def user_list_api_keys(auth_info: Tuple[str, Optional[AuthUser]] = Depends(verify_user_or_admin)):
     """普通用户查看自己的 API Key 列表"""
     _, user = auth_info
+    if not user:
+        raise HTTPException(status_code=401, detail="需要登录才能查看 API Key")
+
     key_manager = get_api_key_manager()
-    keys = key_manager.list_keys()
+    keys = key_manager.list_keys_by_user(user.id)
     stats = key_manager.get_stats()
     return {"object": "list", "data": keys, "stats": stats}
 
@@ -1242,8 +1250,11 @@ async def user_list_api_keys(auth_info: Tuple[str, Optional[AuthUser]] = Depends
 async def user_revoke_api_key(key_id: str, auth_info: Tuple[str, Optional[AuthUser]] = Depends(verify_user_or_admin)):
     """普通用户吊销自己的 API Key"""
     _, user = auth_info
+    if not user:
+        raise HTTPException(status_code=401, detail="需要登录才能删除 API Key")
+
     key_manager = get_api_key_manager()
-    success = key_manager.revoke_key(key_id)
+    success = key_manager.revoke_key(key_id, user_id=user.id)
     if not success:
         raise HTTPException(status_code=404, detail="API key not found")
     return {"object": "api_key", "deleted": True, "id": key_id}

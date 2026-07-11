@@ -194,6 +194,9 @@ class LoadBalancer:
                                    f"{sum(len(v) for v in discovered.values())} 个实例，"
                                    f"涵盖 {len(discovered)} 个模型")
                         
+                        # 清理已下线/不存在的旧实例，防止脏缓存导致请求被路由到无效实例
+                        self._cleanup_stale_instances(discovered)
+                        
                         return discovered
                 except Exception as e:
                     logger.warning(f"[LoadBalancer] get_model_instances 方法调用失败: {e}，回退到 nodes 遍历")
@@ -248,7 +251,33 @@ class LoadBalancer:
                        f"{sum(len(v) for v in discovered.values())} 个实例，"
                        f"涵盖 {len(discovered)} 个模型")
             
+            # 清理已下线/不存在的旧实例，防止脏缓存导致请求被路由到无效实例
+            self._cleanup_stale_instances(discovered)
+            
             return discovered
+    
+    def _cleanup_stale_instances(self, discovered: Dict[str, List[InstanceInfo]]) -> None:
+        """
+        清理内部注册表中已经不存在于 discovered 的实例
+        
+        防止实例下线/卸载后，负载均衡器仍然把请求路由到无效的 worker-X。
+        调用方必须已经持有 self._lock。
+        """
+        for base_id in list(self.instances.keys()):
+            if base_id in discovered:
+                current_ids = {inst.instance_id for inst in discovered[base_id]}
+                stale_ids = set(self.instances[base_id].keys()) - current_ids
+                for stale_id in stale_ids:
+                    logger.info(f"[LoadBalancer] 清理已下线实例: {base_id}::{stale_id}")
+                    del self.instances[base_id][stale_id]
+                
+                # 如果该模型下已经没有实例，删除整个条目
+                if not self.instances[base_id]:
+                    logger.info(f"[LoadBalancer] 模型 {base_id} 已无实例，清理注册表条目")
+                    del self.instances[base_id]
+            else:
+                logger.info(f"[LoadBalancer] 模型 {base_id} 已完全下线，清理注册表条目")
+                del self.instances[base_id]
     
     def get_available_instances(self, model_id: str, force_refresh: bool = False) -> List[InstanceInfo]:
         """
