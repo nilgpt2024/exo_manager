@@ -2012,6 +2012,16 @@ class EXOClusterManager:
         if instance_id is None:
             instance_id = "default"
         
+        # 单节点模式下强制使用 default 实例，避免 auto_instance 反复生成 worker-X
+        # 导致单节点上堆积多个完整模型副本并浪费显存
+        online_nodes = [nid for nid, n in self.nodes.items() if n.status == NodeStatus.ONLINE]
+        if len(online_nodes) == 1 and instance_id != "default":
+            logger.info(
+                f"🔍 [ModelLoad] 单节点模式（{online_nodes[0]}），"
+                f"强制使用 default 实例而非 {instance_id}"
+            )
+            instance_id = "default"
+        
         logger.info(f"🔍 [ModelLoad] instance_id 最终值: {instance_id}, auto_instance={auto_instance}")
         
         # 构建完整模型ID用于内部管理
