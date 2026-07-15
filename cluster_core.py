@@ -243,11 +243,16 @@ class NodeConnector:
             
             # 解析拓扑响应，提取当前节点的设备信息
             device_caps = None
+            actual_node_id = None
             if response.nodes and self.node_info.node_id in response.nodes:
                 device_caps = response.nodes[self.node_info.node_id]
+                actual_node_id = self.node_info.node_id
             elif response.nodes:
+                # 记录节点自己上报的真实 ID（与 Manager 配置的 node_id 可能不同，如后缀 _a1）
                 first_node_id = list(response.nodes.keys())[0]
                 device_caps = response.nodes[first_node_id]
+                actual_node_id = first_node_id
+                logger.warning(f"⚠️ [DEBUG] 未精确匹配，使用第一个节点: {first_node_id}")
             
             if device_caps:
                 # 获取最新的显存数据（来自 pynvml 实时数据）
@@ -283,6 +288,7 @@ class NodeConnector:
                         "fp16": device_caps.flops.fp16,
                         "int8": device_caps.flops.int8,
                     } if device_caps.flops else {},
+                    "actual_node_id": actual_node_id,
                 }
                 
                 # 保留已有的 loaded_models 和其他动态数据
@@ -362,16 +368,34 @@ class NodeConnector:
             if response.nodes:
                 # 尝试多种方式匹配节点
                 device_caps = None
+                matched_node_id = None
                 
-                # 方式1: 精确匹配
+                # 方式1: 精确匹配 Manager 配置的 node_id
                 if self.node_info.node_id in response.nodes:
                     device_caps = response.nodes[self.node_info.node_id]
+                    matched_node_id = self.node_info.node_id
                     logger.info(f"✅ [DEBUG] 精确匹配到节点: {self.node_info.node_id}")
                 else:
-                    # 方式2: 取第一个（可能是自身）
-                    first_node_id = list(response.nodes.keys())[0]
-                    device_caps = response.nodes[first_node_id]
-                    logger.warning(f"⚠️ [DEBUG] 未精确匹配，使用第一个节点: {first_node_id}")
+                    # 方式2: 使用 _fetch_device_info 中记录的真实 node_id（解决后缀 _a1 等不匹配）
+                    actual_node_id = self.node_info.device_info.get("actual_node_id")
+                    if actual_node_id and actual_node_id in response.nodes:
+                        device_caps = response.nodes[actual_node_id]
+                        matched_node_id = actual_node_id
+                        logger.info(f"✅ [DEBUG] 通过 actual_node_id 匹配到节点: {actual_node_id}")
+                    else:
+                        # 方式3: 尝试后缀/前缀模糊匹配
+                        manager_id = self.node_info.node_id
+                        for candidate_id in response.nodes.keys():
+                            if candidate_id.endswith(manager_id) or manager_id.endswith(candidate_id):
+                                device_caps = response.nodes[candidate_id]
+                                matched_node_id = candidate_id
+                                logger.warning(f"⚠️ [DEBUG] 通过模糊匹配到节点: {candidate_id}")
+                                break
+                        
+                        if device_caps is None:
+                            logger.error(f"❌ [DEBUG] 无法在 CollectTopology 中定位当前节点 {self.node_info.node_id}，"
+                                        f"返回节点: {list(response.nodes.keys())}，跳过本次模型列表更新")
+                            return
                 
                 if device_caps:
                     # 1. 更新显存使用情况
@@ -768,45 +792,78 @@ class NodeConnector:
         """
         向节点发送卸载模型命令
 
+        通信优先级与 load_model_to_cluster 保持一致：
+        1. WebSocket（内网穿透 / NAT 场景）
+        2. gRPC SendOpaqueStatus（直连场景）
+
         Args:
             model_id: 要卸载的模型ID
             unload_all_instances: 是否卸载该模型的所有实例
 
         Returns:
-            卸载结果
+            卸载结果 {"success": bool, "method": str, "message": str}
         """
-        if not self.stub:
-            return {"success": False, "error": "gRPC stub 未初始化"}
+        node_id = self.node_info.node_id
 
+        # 1️⃣ 优先：gRPC SendOpaqueStatus（节点 GPU 池原生支持多实例/全部卸载）
+        if self.stub:
+            try:
+                from proto.node_service_pb2 import SendOpaqueStatusRequest
+
+                unload_command = json.dumps({
+                    "type": "manager_unload_model",
+                    "requester": "exo_manager",
+                    "model_id": model_id,
+                    "unload_all_instances": unload_all_instances,
+                    "timestamp": time.time()
+                })
+
+                request = SendOpaqueStatusRequest(
+                    request_id=f"unload_{model_id}_{int(time.time())}",
+                    status=unload_command
+                )
+
+                await asyncio.wait_for(
+                    self.stub.SendOpaqueStatus(request),
+                    timeout=15.0
+                )
+
+                logger.info(f"🗑️ [Unload] 已通过 gRPC 向节点 {node_id} 发送卸载命令: {model_id}")
+
+                return {
+                    "success": True,
+                    "method": "grpc",
+                    "message": f"卸载命令已通过 gRPC 发送给节点 {node_id}"
+                }
+
+            except Exception as e:
+                logger.warning(f"⚠️ [Unload] gRPC 发送失败，尝试 WebSocket 回退: {e}")
+
+        # 2️⃣ 回退：WebSocket 实时推送（gRPC 不可达或 WS-only 节点）
         try:
-            import sys
-            from proto.node_service_pb2 import SendOpaqueStatusRequest
+            _ws_mgr = _get_node_ws_manager()
+            if _is_ws_available() and _ws_mgr and _ws_mgr.is_node_connected(node_id):
+                logger.info(f"📡 [Unload] 尝试通过 WebSocket 推送到节点 {node_id}...")
 
-            unload_command = json.dumps({
-                "type": "manager_unload_model",
-                "requester": "exo_manager",
-                "model_id": model_id,
-                "unload_all_instances": unload_all_instances,
-                "timestamp": time.time()
-            })
-            
-            request = SendOpaqueStatusRequest(
-                request_id=f"unload_{model_id}_{int(time.time())}",
-                status=unload_command
-            )
-            
-            response = await asyncio.wait_for(
-                self.stub.SendOpaqueStatus(request),
-                timeout=15.0
-            )
-            
-            logger.info(f"🗑️ 已向节点 {self.node_info.node_id} 发送卸载命令: {model_id}")
-            
-            return f"卸载命令已发送给节点 {self.node_info.node_id}"
-            
+                ws_success = await _ws_mgr.send_model_unload_request(
+                    node_id=node_id,
+                    model_id=model_id,
+                    unload_all_instances=unload_all_instances
+                )
+
+                if ws_success:
+                    logger.info(f"🗑️ [Unload] 已通过 WebSocket 向节点 {node_id} 发送卸载请求: {model_id} (all={unload_all_instances})")
+                    return {
+                        "success": True,
+                        "method": "websocket",
+                        "message": f"卸载请求已通过 WebSocket 发送: {model_id} (all={unload_all_instances})"
+                    }
+                else:
+                    logger.warning(f"⚠️ [Unload] WebSocket 发送失败")
         except Exception as e:
-            logger.error(f"❌ 发送卸载命令失败: {e}")
-            raise
+            logger.error(f"❌ [Unload] WebSocket 发送异常: {e}")
+
+        return {"success": False, "error": "gRPC stub 未初始化且 WebSocket 不可用或发送失败"}
 
     async def send_inference_prompt(
         self,
@@ -1458,6 +1515,19 @@ class EXOClusterManager:
                         return True
 
             await asyncio.sleep(check_interval)
+
+    async def _fetch_loaded_models_after_delay(self, node_id: str, delay: float = 3.0):
+        """
+        延迟后主动拉取一次节点的 loaded_models，用于 gRPC 单向命令后的状态同步。
+        """
+        await asyncio.sleep(delay)
+        connector = self.connectors.get(node_id)
+        if connector and connector.stub:
+            try:
+                await connector._fetch_loaded_models()
+                logger.info(f"🔄 [Unload] 已同步节点 {node_id} 的模型状态")
+            except Exception as e:
+                logger.warning(f"⚠️ [Unload] 同步节点 {node_id} 模型状态失败: {e}")
 
     def get_model_instances(self, model_id: str) -> List[Dict[str, Any]]:
         """
@@ -2498,38 +2568,50 @@ class EXOClusterManager:
         logger.info(f"🗑️ 开始卸载模型: {full_model_id} (卸载所有实例={unload_all_instances})")
         
         results = []
-        
+        any_command_sent = False
+
         for node_id, connector in self.connectors.items():
-            if not connector.stub:
+            # 允许 WebSocket-only 节点参与卸载（只要任一通道可用即可）
+            ws_available = (
+                _is_ws_available()
+                and _get_node_ws_manager()
+                and _get_node_ws_manager().is_node_connected(node_id)
+            )
+            if not connector.stub and not ws_available:
                 continue
-            
+
             try:
                 # 传入完整模型ID用于精确匹配，并传递 unload_all_instances 标志
                 result = await connector.send_unload_command(full_model_id, unload_all_instances=unload_all_instances)
                 results.append({
                     "node_id": node_id,
-                    "success": True,
-                    "message": result
+                    "success": result.get("success", False),
+                    "method": result.get("method"),
+                    "message": result.get("message") or result.get("error")
                 })
-                
-                # 更新本地缓存（匹配完整ID或基础ID）
-                node_info = self.nodes.get(node_id)
-                if node_info:
-                    node_info.loaded_models = [
-                        m for m in node_info.loaded_models 
-                        if m.get("model_id") != full_model_id and 
-                           (not unload_all_instances or m.get("model_id", "").split("::")[0] != model_id)
-                    ]
-                    
+
+                if result.get("success"):
+                    any_command_sent = True
+
+                    # WebSocket 路径：等待 Node 的 model_unload_complete 回调再清理本地状态，
+                    # 避免命令未到达节点时 Manager 就丢失模型记录。
+                    # gRPC 路径：SendOpaqueStatus 是单向命令，安排一次显式拉取以同步真实状态。
+                    if result.get("method") == "grpc":
+                        asyncio.create_task(
+                            self._fetch_loaded_models_after_delay(node_id, delay=3.0),
+                            name=f"fetch-after-unload-{node_id}-{model_id}"
+                        )
+
             except Exception as e:
+                logger.error(f"❌ [UnloadCluster] 节点 {node_id} 卸载异常: {e}")
                 results.append({
                     "node_id": node_id,
                     "success": False,
                     "error": str(e)
                 })
-        
-        # 清理分配注册表
-        if model_id in self._allocation_registry:
+
+        # 只有至少一个卸载命令成功发出后，才清理分配注册表
+        if any_command_sent and model_id in self._allocation_registry:
             del self._allocation_registry[model_id]
             logger.info(f"🗑️ [分配注册] 已移除模型 {model_id} 的分配记录")
 

@@ -4422,15 +4422,17 @@ class NodeWSManager:
     async def send_model_unload_request(
         self,
         node_id: str,
-        model_id: str
+        model_id: str,
+        unload_all_instances: bool = False
     ) -> bool:
         """
         通过 WebSocket 发送模型卸载请求
-        
+
         Args:
             node_id: 目标节点
             model_id: 要卸载的模型ID
-            
+            unload_all_instances: 是否卸载该模型的所有实例
+
         Returns:
             是否发送成功
         """
@@ -4451,12 +4453,13 @@ class NodeWSManager:
 
         unload_msg = {
             "type": "model_unload",
-            "model_id": model_id
+            "model_id": model_id,
+            "unload_all_instances": unload_all_instances
         }
-        
+
         try:
             await websocket.send_text(json.dumps(unload_msg, ensure_ascii=False))
-            logger.info(f"[NodeWS] 🗑️ 推送模型卸载请求 → {node_id}: {model_id}")
+            logger.info(f"[NodeWS] 🗑️ 推送模型卸载请求 → {node_id}: {model_id} (all={unload_all_instances})")
             return True
         except Exception as e:
             logger.error(f"[NodeWS] ❌ 发送模型卸载请求失败 ({node_id}): {e}")

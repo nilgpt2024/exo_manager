@@ -6988,6 +6988,15 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     if (typeof showCustomModelsList === 'function') {
                         await showCustomModelsList();
                     }
+
+                    // 如果当前选中的模型刚好被编辑，刷新隐藏的 model_path 和层数
+                    const currentModelId = document.getElementById('inputModelId').value.trim();
+                    const editedModelId = form.dataset.modelId;
+                    if (currentModelId && currentModelId === editedModelId) {
+                        const select = document.getElementById('selectModelId');
+                        if (select) select.value = currentModelId;
+                        onModelSelected(currentModelId);
+                    }
                 } else {
                     showToast(result?.error || '保存失败', 'error');
                 }
