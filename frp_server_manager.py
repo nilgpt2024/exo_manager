@@ -617,7 +617,7 @@ class FRPServerManager:
         return "\n".join(lines) + "\n"
 
     def _build_launch_command(self, node_id: str, local_port: int, server_addr: str, manager_port: int = None) -> str:
-        """构建 exo 节点启动命令"""
+        """构建 exo 节点启动命令（manager URL 由前端 location.origin 最终覆盖）"""
         import os
         if manager_port is None:
             manager_port = int(os.getenv("EXO_MANAGER_PORT", "8080"))
@@ -705,6 +705,11 @@ class FRPServerManager:
 
         返回 exo 节点连接到本 frps 所需的全部参数。
         此方法供 user.html 页面调用，为登录用户展示专属启动命令。
+
+        【关于 --manager URL】
+          后端生成的 launch_command 里 --manager 仅作占位（使用 EXO_MANAGER_PORT 默认值）；
+          前端统一在 getFinalNodeData() 里用 location.protocol + '//' + location.host 覆盖，
+          保证与用户浏览器实际访问的 Manager 地址 + 端口完全一致。
 
         Args:
             user_node_id: 节点 ID（基于 user_id 自动生成）

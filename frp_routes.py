@@ -286,7 +286,7 @@ async def get_user_connection_info(
     if not user:
         raise HTTPException(status_code=401, detail="会话已过期，请重新登录")
 
-    # 从请求中自动提取服务器公网地址
+    # 从请求中自动提取 FRPS 服务器地址（Host 头，带端口号）
     server_addr = _extract_server_addr(request)
 
     # manager 地址（与 frps 相同，或可单独配置）
@@ -320,32 +320,35 @@ async def get_user_connection_info(
 
 def _extract_server_addr(request: Request) -> str:
     """
-    从请求中自动提取服务器公网地址
+    从请求中自动提取 FRPS 服务器地址（保留端口号，解决反向代理 + 非默认端口场景）
 
-    优先级: X-Forwarded-Host > Host(排除localhost) > X-Forwarded-For > Host(兜底)
+    [优先级（带端口号）]
+      X-Forwarded-Host (可能包含:port) > Host 头 (含:port) > 兜底占位符
     """
-    # 优先使用反向代理转发的原始 Host
+    # 优先使用反向代理转发的原始 Host (含端口，例如 ai.suipce.com:18080)
     forwarded_host = request.headers.get("x-forwarded-host")
     if forwarded_host:
-        addr = forwarded_host.split(":")[0].strip()
-        return addr
+        # 取第一个（多代理逗号分隔），去掉多余空白
+        first_hop = forwarded_host.split(",")[0].strip()
+        if first_hop:
+            return first_hop
 
-    # 其次使用请求的 Host 头（排除本地地址）
+    # 其次使用请求的 Host 头（含端口，例如 127.0.0.1:8080 或 ai.suipce.com:18080）
     host = request.headers.get("host", "")
     if host:
-        addr = host.split(":")[0].strip()
-        if addr and addr not in ("localhost", "127.0.0.1", "::1"):
-            return addr
+        addr_part = host.split(":")[0].strip() if ":" in host else host.strip()
+        if addr_part not in ("localhost", "127.0.0.1", "::1"):
+            return host  # ✨ 返回原始 Host (含端口号)
 
-    # 最后尝试 X-Forwarded-For
+    # 再尝试 X-Forwarded-For 兜底 (不含端口，仅 IP)
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         addr = xff.split(",")[0].strip().split(":")[0]
         if addr and addr not in ("localhost", "127.0.0.1"):
             return addr
 
-    # 兜底：返回 Host（即使是 localhost 也比占位符好）
-    return host.split(":")[0] if host else "<FRPS_SERVER_IP>"
+    # 最终兜底：返回 Host（即使是本地地址，也保持原始含端口的形式）
+    return host if host else "<FRPS_SERVER_IP>"
 
 
 # ==================== 集群状态接口 ====================

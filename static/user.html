@@ -3265,6 +3265,24 @@ function getFinalNodeData() {
             d.launch_command = built;
         }
     }
+
+    // ✨ 核心修复：直接用页面真实地址覆盖 --manager
+    // 不管后端/前端兜底之前生成的是什么 manager URL，统一最终替换为 location.origin
+    // 这样 Manager 监听任何端口（80/443/8080/18080/8443...）生成的命令都能直接连上
+    if (d && d.launch_command) {
+        var realOrigin = location.protocol + '//' + location.host;
+        // 替换已有 --manager
+        if (d.launch_command.indexOf('--manager ') !== -1) {
+            d.launch_command = d.launch_command.replace(
+                /--manager\s+\S+/,
+                '--manager ' + realOrigin
+            );
+        } else {
+            // 万一命令里漏了 --manager 就追加
+            d.launch_command = d.launch_command.trim() + ' --manager ' + realOrigin;
+        }
+    }
+
     return d;
 }
 
