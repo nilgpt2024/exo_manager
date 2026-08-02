@@ -3659,18 +3659,23 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
 
         async function checkAuth() {
             try {
-                const res = await fetch('/me');
+                const res = await fetch('/me', { credentials: 'include' });
                 if (res.ok) {
                     const data = await res.json();
                     currentUser = data.data;
+                    // ⚠️ 角色守卫：管理员后台只允许 role=admin 进入，普通用户直接跳回用户面板
+                    if (!currentUser || currentUser.role !== 'admin') {
+                        window.location.replace('/user/dashboard');
+                        return false;
+                    }
                     updateUIForUser();
                     return true;
                 }
             } catch (e) {
                 console.error('认证检查失败:', e);
             }
-            // 未登录，跳转到登录页
-            window.location.href = '/admin';
+            // 未登录，跳转到管理员登录页（不要用 replace，保留 history 让浏览器能前进）
+            window.location.href = '/admin/login';
             return false;
         }
 

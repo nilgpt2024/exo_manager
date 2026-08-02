@@ -1027,6 +1027,19 @@
             gap: 0.5rem;
         }
 
+        /* Loading spinner */
+        .loading {
+            display: inline-block;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         .toast {
             padding: 0.75rem 1.25rem;
             border-radius: 12px;
@@ -1212,7 +1225,7 @@
         }
 
         .connect-header p {
-            color: var(--text-secondary);
+            color: var(--user-text-secondary);
             margin-bottom: 1rem;
             font-size: 0.9rem;
         }
@@ -1713,19 +1726,19 @@
 
     <!-- 导航菜单 -->
     <nav class="nav-menu">
-        <button class="nav-item active" onclick="switchPage('chat')">
+        <button class="nav-item active" onclick="switchPage('chat', this)">
             <i class="fas fa-message"></i> AI 对话
         </button>
-        <button class="nav-item" onclick="switchPage('apikey')">
+        <button class="nav-item" onclick="switchPage('apikey', this)">
             <i class="fas fa-code"></i> API 接口
         </button>
-        <button class="nav-item" onclick="switchPage('stats')">
+        <button class="nav-item" onclick="switchPage('stats', this)">
             <i class="fas fa-chart-line"></i> 使用统计
         </button>
-        <button class="nav-item" onclick="switchPage('connect')">
+        <button class="nav-item" onclick="switchPage('connect', this)">
             <i class="fas fa-plug"></i> 节点连接
         </button>
-        <button class="nav-item" onclick="switchPage('settings')">
+        <button class="nav-item" onclick="switchPage('settings', this)">
             <i class="fas fa-gear"></i> 账户设置
         </button>
     </nav>
@@ -2204,30 +2217,44 @@ async function init() {
 
 async function checkAuth() {
     try {
-        const res = await fetch('/me');
+        const res = await fetch('/me', { credentials: 'include' });
         if (res.ok) {
             const data = await res.json();
             currentUser = data.data;
+            // ⚠️ 角色守卫：用户面板只允许普通用户(role != admin)进入，管理员直接跳管理后台
+            if (currentUser && currentUser.role === 'admin') {
+                window.location.replace('/admin/dashboard');
+                return false;
+            }
             document.getElementById('userName').textContent = currentUser.nickname || '用户';
             document.getElementById('userAvatar').src = currentUser.avatar || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%230d9488"><circle cx="12" cy="8" r="4"/><path d="M12 14c-5 0-9 3-9 7v1h18v-1c0-4-4-7-9-7z"/></svg>';
+            if (typeof document.getElementById('settingsRole') !== 'undefined' && document.getElementById('settingsRole')) {
+                document.getElementById('settingsRole').textContent = currentUser.role === 'admin' ? '管理员' : '普通用户';
+            }
+            return true;
         } else {
-            window.location.href = '/login';
+            window.location.replace('/login');
+            return false;
         }
     } catch (e) {
-        window.location.href = '/login';
+        window.location.replace('/login');
+        return false;
     }
 }
 
 function logout() {
-    fetch('/logout', { method: 'POST' }).finally(() => {
+    fetch('/logout', { method: 'POST', credentials: 'include' }).finally(() => {
         window.location.href = '/login';
     });
 }
 
 // ==================== 页面切换 ====================
-function switchPage(page) {
+function switchPage(page, btnEl) {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    event.currentTarget.classList.add('active');
+    // 修复：不依赖全局 event（Firefox/严格模式 event 未定义 → ReferenceError），
+    // 而是由 onclick 显式传入被点击按钮
+    const target = btnEl || (typeof event !== 'undefined' && event && event.currentTarget);
+    if (target) target.classList.add('active');
 
     document.getElementById('pageChat').classList.toggle('page-hidden', page !== 'chat');
     document.getElementById('pageApikey').classList.toggle('page-hidden', page !== 'apikey');
@@ -2236,7 +2263,7 @@ function switchPage(page) {
     document.getElementById('pageSettings').classList.toggle('page-hidden', page !== 'settings');
 
     if (page === 'apikey') loadApiKeys();
-    if (page === 'stats') loadStats(30);
+    if (page === 'stats') loadStats(7);
     if (page === 'connect') loadConnectionInfo();
     if (page === 'settings') loadSettingsInfo();
 }
@@ -2256,7 +2283,9 @@ async function loadQuota() {
                 fillEl.style.width = '0%';
             } else {
                 valEl.textContent = q.remaining.toLocaleString();
-                const pct = Math.round(q.used_tokens / q.total_quota * 100);
+                const total = Number(q.total_quota) || 0;
+                const used = Number(q.used_tokens) || 0;
+                const pct = total > 0 ? Math.round(used / total * 100) : 0;
                 fillEl.style.width = Math.min(pct, 100) + '%';
 
                 if (pct >= 90) fillEl.style.background = '#ef4444';
@@ -2268,7 +2297,7 @@ async function loadQuota() {
 // ==================== 模型 ====================
 async function loadModels() {
     try {
-        const res = await fetch('/v1/models');
+        const res = await fetch('/v1/models', { credentials: 'include' });
         const data = await res.json();
         if (data.data?.length) {
             // 去重: 只保留基础模型名（去掉 ::worker-x 后缀）
@@ -2391,6 +2420,7 @@ async function sendMessage() {
         const res = await fetch('/v1/chat/completions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({
                 model: selectedModel,
                 messages: [...chatHistory],
@@ -2594,7 +2624,7 @@ document.getElementById('apiKeyModal')?.addEventListener('click', function(e) {
 async function revokeKey(key) {
     if (!confirm('确定要删除此 Key 吗？')) return;
     try {
-        await fetch('/v1/user/keys/' + encodeURIComponent(key), { method: 'DELETE' });
+        await fetch('/v1/user/keys/' + encodeURIComponent(key), { method: 'DELETE', credentials: 'include' });
         showToast('已删除', 'success');
         loadApiKeys();
     } catch (e) {}
@@ -2608,7 +2638,7 @@ async function loadStats(days, btnEl) {
     }
 
     try {
-        const res = await fetch(`/v1/user/api/stats?days=${days || 30}`);
+        const res = await fetch(`/v1/user/api/stats?days=${days || 30}`, { credentials: 'include' });
         const data = await res.json();
 
         if (data.success && data.data) {
@@ -2657,7 +2687,7 @@ function renderModelStats(models) {
 
 async function loadHistory() {
     try {
-        const res = await fetch('/v1/user/api/history?limit=20');
+        const res = await fetch('/v1/user/api/history?limit=20', { credentials: 'include' });
         const data = await res.json();
         const listEl = document.getElementById('historyList');
 
@@ -2761,6 +2791,7 @@ let showSensitive = false;
 let myNodes = [];           // 用户的所有节点 [{node_id, local_port, label}]
 let selectedNodeIndex = 0;  // 当前选中的节点索引
 const BASE_PORT = 50051;    // 起始端口
+const nodeConnCache = new Map(); // node_id -> 后端返回的连接信息
 
 function getMyNodesKey() {
     return currentUser ? 'exo_my_nodes_' + currentUser.id : 'exo_my_nodes';
@@ -2786,6 +2817,25 @@ function saveMyNodes() {
     localStorage.setItem(getMyNodesKey(), JSON.stringify(myNodes));
 }
 
+async function fetchNodeConnection(node) {
+    if (!node || !node.node_id) return null;
+    if (nodeConnCache.has(node.node_id)) return nodeConnCache.get(node.node_id);
+
+    try {
+        const res = await fetch(`/api/frps/user-connection?node_id=${encodeURIComponent(node.node_id)}&local_port=${node.local_port || BASE_PORT}`, {
+            credentials: 'include'
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || '获取节点连接信息失败');
+        nodeConnCache.set(node.node_id, data);
+        return data;
+    } catch (e) {
+        console.error('获取节点连接信息失败:', node.node_id, e);
+        return null;
+    }
+}
+
 function addNode() {
     var idx = myNodes.length;
     var baseId = connectData ? connectData.node_id : 'node';
@@ -2802,7 +2852,8 @@ function addNode() {
     myNodes.push({
         node_id: newId,
         local_port: 50051,
-        label: label
+        label: label,
+        memory_limit_gb: 4.0  // ✨ 默认每节点 4GB 显存限制
     });
     saveMyNodes();
     renderNodeTabs();
@@ -2820,19 +2871,20 @@ function removeNode(index) {
     showToast('已移除节点: ' + removed.node_id);
 }
 
-function selectNode(index) {
+async function selectNode(index) {
     selectedNodeIndex = index;
     renderNodeTabs();
-    updateCommandForSelectedNode();
+    await updateCommandForSelectedNode();
 }
 
 function getSelectedNodeData() {
     if (!myNodes || !myNodes[selectedNodeIndex]) return null;
     var node = myNodes[selectedNodeIndex];
-    // 基于 API 返回的 connectData + 当前节点的 node_id 和 port 合并
+    // 基于 API 返回的 connectData + 当前节点的 node_id / port / memory_limit_gb 合并
     var d = Object.assign({}, connectData, {
         node_id: node.node_id,
-        local_port: node.local_port
+        local_port: node.local_port,
+        memory_limit_gb: node.memory_limit_gb != null ? node.memory_limit_gb : 4.0
     });
     return d;
 }
@@ -2866,6 +2918,14 @@ function renderNodeTabs() {
                     ' onclick="event.stopPropagation()" onchange="changeNodePort(' + i + ', this.value)"' +
                     ' title="同一台设备运行多个节点时修改为不同端口（如 50052）">' +
                 '</div>' +
+                '<div class="node-tab-port-row">' +
+                    '<span class="node-tab-port-label">显存:</span>' +
+                    '<input type="number" class="node-tab-port-input" value="' + (n.memory_limit_gb != null ? n.memory_limit_gb : 4.0) + '"' +
+                    ' min="0" max="512" step="0.5"' +
+                    ' onclick="event.stopPropagation()" onchange="changeNodeMemoryLimit(' + i + ', this.value)"' +
+                    ' title="每节点显存上限(GB)，设为0=按真实GPU大小；默认 4GB">' +
+                    '<span class="node-tab-port-label" style="margin-left:2px;">GB</span>' +
+                '</div>' +
                 (myNodes.length > 1 ?
                     '<button class="node-tab-remove" onclick="event.stopPropagation();removeNode(' + i + ')" title="移除此设备">' +
                         '<i class="fas fa-times"></i></button>'
@@ -2878,7 +2938,7 @@ function renderNodeTabs() {
     if (hint) hint.style.display = 'none';
 }
 
-function changeNodePort(index, value) {
+async function changeNodePort(index, value) {
     var port = parseInt(value);
     if (isNaN(port) || port < 1024 || port > 65535) {
         showToast('端口范围: 1024-65535');
@@ -2886,8 +2946,9 @@ function changeNodePort(index, value) {
     }
     myNodes[index].local_port = port;
     saveMyNodes();
+    nodeConnCache.delete(myNodes[index].node_id);
     if (index === selectedNodeIndex) {
-        updateCommandForSelectedNode();
+        await updateCommandForSelectedNode();
     }
 }
 
@@ -2900,12 +2961,46 @@ function changeNodeLabel(index, value) {
     renderNodeTabs();
 }
 
-function updateCommandForSelectedNode() {
-    var d = getSelectedNodeData();
-    if (!d || !connectData) return;
+async function changeNodeMemoryLimit(index, value) {
+    var gb = parseFloat(value);
+    if (isNaN(gb) || gb < 0) {
+        showToast('显存限制必须是 >= 0 的数字(GB)');
+        return;
+    }
+    if (gb > 512) {
+        showToast('显存限制不能超过 512 GB');
+        return;
+    }
+    myNodes[index].memory_limit_gb = gb;
+    saveMyNodes();
+    nodeConnCache.delete(myNodes[index].node_id);
+    showToast(gb > 0 ? ('显存限制已设为: ' + gb + ' GB') : '显存限制已取消（按真实GPU大小）');
+    if (index === selectedNodeIndex) {
+        await updateCommandForSelectedNode();
+    }
+}
 
-    // 重新生成启动命令（使用选中节点的 node_id 和 local_port）
-    d.launch_command = buildLaunchCommand(d);
+async function updateCommandForSelectedNode() {
+    var node = myNodes[selectedNodeIndex];
+    if (!node || !connectData) return;
+
+    // 以基础连接信息为底，叠加当前选中节点的 node_id / port / memory_limit_gb
+    var d = Object.assign({}, connectData, {
+        node_id: node.node_id,
+        local_port: node.local_port,
+        memory_limit_gb: node.memory_limit_gb != null ? node.memory_limit_gb : 4.0
+    });
+
+    // 向后端获取该节点专属的 remote_port / launch_command（remote_port 按 node_id 哈希计算）
+    const nodeInfo = await fetchNodeConnection(node);
+    var memGb = d.memory_limit_gb;
+    if (nodeInfo && nodeInfo.launch_command) {
+        d = Object.assign(d, nodeInfo);
+        // [MEMORY LIMIT] 后端生成的 launch_command 不含 --memory-limit，前端补全
+        d.launch_command = ensureMemoryLimitInCmd(nodeInfo.launch_command, memGb);
+    } else {
+        d.launch_command = buildLaunchCommand(d);
+    }
 
     document.getElementById('launchCommand').textContent = d.launch_command || '--';
 
@@ -2931,14 +3026,32 @@ function buildLaunchCommand(d) {
     var lport = d.local_port || 50051;
     var bport = d.bind_port || '7000';
     var mgr = location.protocol + '//' + location.host;
+    var memLimit = '';
+    if (d && d.memory_limit_gb != null && parseFloat(d.memory_limit_gb) > 0) {
+        memLimit = ' --memory-limit ' + parseFloat(d.memory_limit_gb);
+    }
     return (
         'python -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId +
         ' --node-port ' + lport +
         ' --frp-server-addr ' + addr +
         ' --frp-server-port ' + bport +
         " --frp-token '" + token + "'" +
-        ' --manager ' + mgr
+        ' --manager ' + mgr +
+        memLimit
     );
+}
+
+/**
+ * 在任意 launch_cmd 字符串中追加/更新 --memory-limit 参数。
+ * 保持与 buildLaunchCommand 的行为一致。
+ */
+function ensureMemoryLimitInCmd(cmd, memory_limit_gb) {
+    if (!cmd) return cmd;
+    var gb = parseFloat(memory_limit_gb);
+    // 先移除旧的 --memory-limit（值可以是整数、小数、带引号的字符串）
+    var cleaned = cmd.replace(/\s+--memory-limit\s+['"]?[0-9]+(?:\.[0-9]+)?['"]?/g, '');
+    if (!(gb > 0)) return cleaned;
+    return cleaned + ' --memory-limit ' + gb;
 }
 
 function escapeHtml(s) {
@@ -2969,7 +3082,8 @@ async function loadConnectionInfo() {
             myNodes = [{
                 node_id: baseId + deviceTag,
                 local_port: 50051,
-                label: '我的设备'
+                label: '我的设备',
+                memory_limit_gb: 4.0
             }];
             saveMyNodes();
         }
@@ -2978,7 +3092,10 @@ async function loadConnectionInfo() {
         renderNodeTabs();
 
         // 渲染连接信息（基于当前选中节点）
-        updateCommandForSelectedNode();
+        await updateCommandForSelectedNode();
+
+        // 更新 FRP Server 状态栏
+        renderConnectionInfo(connectData);
     } catch (e) {
         document.getElementById('frpStatusIndicator').className = 'status-indicator error';
         document.getElementById('frpStatusText').textContent = '获取连接信息失败: ' + e.message;
@@ -2998,7 +3115,7 @@ async function loadClusterStatus() {
 
     async function fetchCluster() {
         try {
-            const res = await fetch('/api/frps/cluster-status');
+            const res = await fetch('/api/frps/cluster-status', { credentials: 'include' });
             if (!res.ok) return;
             const d = await res.json();
             if (!d.success || !d.cluster) return;
@@ -3014,13 +3131,18 @@ function renderClusterStatus(d) {
     var c = d.cluster;
 
     // 统计卡片
-    document.getElementById('statTotalNodes').textContent = c.total_nodes;
-    document.getElementById('statOnlineNodes').textContent = c.online_nodes;
+    document.getElementById('statTotalNodes').textContent = (c.total_nodes || 0);
+    document.getElementById('statOnlineNodes').textContent = (c.online_nodes || 0);
     document.getElementById('statTotalVram').textContent = (c.total_memory_gb || 0).toFixed(1) + ' GB';
     document.getElementById('statHealth').textContent = (c.health_percent || 0) + '%';
 
-    // 我的节点
+    // 我的节点（后端只认基础 node_{user_id}，但前端可能使用带后缀的多节点 ID，所以用 myNodes 列表兜底匹配）
+    var myNodeIds = new Set((myNodes || []).map(function(n) { return n.node_id; }));
     var myNode = d.my_node;
+    if (!myNode || !myNode.node_id) {
+        myNode = (d.nodes || []).find(function(n) { return myNodeIds.has(n.node_id); });
+    }
+
     var badge = document.getElementById('myNodeBadge');
     var body = document.getElementById('myNodeBody');
 
@@ -3028,18 +3150,24 @@ function renderClusterStatus(d) {
         var isOnline = myNode.status === 'online';
         badge.textContent = isOnline ? '在线' : '离线';
         badge.className = 'my-node-badge' + (isOnline ? ' online' : '');
+
+        // 后端 my_node 返回原始结构；兜底时返回的是已简化的节点信息，需要做兼容
         var di = myNode.device_info || {};
         var md = di.memory_detail || {};
+        var chip = di.chip || myNode.chip || 'Unknown';
+        var memoryMb = di.memory || (myNode.memory_gb ? myNode.memory_gb * 1024 : 0);
+        var memoryUsedMb = md.used || myNode.memory_used_mb || 0;
+        var memoryTotalMb = md.total || myNode.memory_total_mb || 0;
         var models = (myNode.loaded_models || []).map(function(m) { return m.model_id || m; }).join(', ') || '无';
 
         body.innerHTML =
             '<div class="my-node-info-grid">' +
                 '<div class="my-node-info-row"><span>节点 ID</span><span>' + myNode.node_id + '</span></div>' +
                 '<div class="my-node-info-row"><span>状态</span><span style="color:' + (isOnline ? '#059669' : '#dc2626') + '">' + (isOnline ? '在线运行中' : '离线') + '</span></div>' +
-                '<div class="my-node-info-row"><span>设备</span><span>' + (di.chip || 'Unknown') + '</span></div>' +
-                '<div class="my-node-info-row"><span>显存</span><span>' + ((di.memory || 0) / 1024).toFixed(1) + ' GB</span></div>' +
-                (md.total > 0 ?
-                    '<div class="my-node-info-row"><span>已用显存</span><span>' + md.used + '/' + md.total + ' MB</span></div>'
+                '<div class="my-node-info-row"><span>设备</span><span>' + chip + '</span></div>' +
+                '<div class="my-node-info-row"><span>显存</span><span>' + (memoryMb / 1024).toFixed(1) + ' GB</span></div>' +
+                (memoryTotalMb > 0 ?
+                    '<div class="my-node-info-row"><span>已用显存</span><span>' + memoryUsedMb + '/' + memoryTotalMb + ' MB</span></div>'
                     : '') +
                 '<div class="my-node-info-row"><span>已加载模型</span><span>' + models + '</span></div>' +
             '</div>';
@@ -3063,16 +3191,46 @@ function renderClusterStatus(d) {
     for (var i = 0; i < nodes.length; i++) {
         var n = nodes[i];
         var isOn = n.status === 'online';
+        var isMine = n.is_mine || myNodeIds.has(n.node_id);
         html +=
-            '<div class="node-item' + (n.is_mine ? ' is-mine' : '') + '">' +
+            '<div class="node-item' + (isMine ? ' is-mine' : '') + '">' +
                 '<div class="node-status-dot ' + (isOn ? 'online' : 'offline') + '"></div>' +
                 '<span class="node-id-text">' + n.node_id + '</span>' +
-                '<span class="node-chip-text">' + n.chip + '</span>' +
-                '<span class="node-vram-text">' + n.memory_gb + ' GB</span>' +
-                (n.is_mine ? '<span class="node-mine-tag">我的</span>' : '') +
+                '<span class="node-chip-text">' + (n.chip || 'Unknown') + '</span>' +
+                '<span class="node-vram-text">' + (n.memory_gb || 0) + ' GB</span>' +
+                (isMine ? '<span class="node-mine-tag">我的</span>' : '') +
             '</div>';
     }
     listEl.innerHTML = html;
+
+    // ==================== 自动追加节点 ====================
+    // 触发条件：myNodes 中已有的**所有**节点都已在集群中在线运行
+    // → 用户已把当前所有连接命令都用掉了，自动为下一台设备生成新代码
+    var allMineOnline = false;
+    if (myNodes && myNodes.length > 0 && nodes) {
+        // 构建"我的且在线"的 node_id 集合
+        var onlineMineIds = new Set();
+        nodes.forEach(function(n) {
+            var isMine = n.is_mine || myNodeIds.has(n.node_id);
+            if (isMine && n.status === 'online') onlineMineIds.add(n.node_id);
+        });
+        allMineOnline = myNodes.every(function(n) { return onlineMineIds.has(n.node_id); });
+    }
+    if (allMineOnline) {
+        // 有 onlineMineIds 说明是真实进入到判断逻辑的（避免离线状态下误触发）
+        if (onlineMineIds.size > 0) {
+            // 用 setTimeout 避免打断当前 render 流程
+            setTimeout(function() {
+                var oldLen = myNodes.length;
+                addNode();
+                // 如果确实新增了节点，立即为新节点生成命令并选中
+                if (myNodes.length > oldLen) {
+                    selectNode(myNodes.length - 1);
+                    showToast('已为你生成新设备连接命令 (#' + myNodes.length + ')', 'success');
+                }
+            }, 0);
+        }
+    }
 }
 
 function renderConnectionInfo(data) {
@@ -3085,9 +3243,36 @@ function renderConnectionInfo(data) {
 }
 
 function copyCommand() {
-    var d = getSelectedNodeData();
+    var d = getFinalNodeData();
     if (!d || !d.launch_command) return;
     copyText(d.launch_command);
+}
+
+// ==================== 统一脚本数据源 ====================
+// 保证"复制命令 / 脚本预览 / 下载脚本"三处使用完全相同的基础启动命令
+function getFinalNodeData() {
+    var d = getSelectedNodeData();
+    if (!d) return null;
+    // 页面上已按当前节点渲染好的启动命令（来自后端专属生成，含正确 remote_port/chatgpt-api-port 等参数）
+    var displayedCmd = document.getElementById('launchCommand').textContent;
+    if (displayedCmd && displayedCmd !== '--' && displayedCmd.indexOf('加载中') === -1 && displayedCmd.indexOf('无法加载') === -1) {
+        d.launch_command = displayedCmd;
+    }
+    // 兜底：没有后端生成的命令时，用 buildLaunchCommand 本地生成一份
+    if (!d.launch_command || d.launch_command.indexOf('python -m exo.main') !== 0) {
+        var built = buildLaunchCommand(d);
+        if (built && built.indexOf('python -m exo.main') === 0) {
+            d.launch_command = built;
+        }
+    }
+    return d;
+}
+
+function buildCurrentScript() {
+    var d = getFinalNodeData();
+    if (!d) return null;
+    var script = currentOS === 'win' ? generateWinScript(d) : generateLinuxScript(d);
+    return { data: d, script: script };
 }
 
 // ==================== 一键启动脚本 ====================
@@ -3103,11 +3288,15 @@ function switchOS(os) {
 
 function generateWinScript(d) {
     var nodeId = d.node_id || 'node';
-    var token = d.frp_token || '';
-    var addr = d.server_addr || '<FRPS_SERVER_IP>';
-    var lport = d.local_port || 50051;
+    // 优先使用后端为该 node_id 生成的启动命令，保证 remote_port / chatgpt-api-port / manager 等参数与后端一致
+    var launchCmd = (d && d.launch_command) ? d.launch_command : buildLaunchCommand(d);
+    // Windows batch 中把 python 替换为由脚本检测到的 Python，并把单引号包裹的 token 改为双引号
+    launchCmd = launchCmd.replace(/^python -m exo\.main/, '"%EXO_PYTHON%" -m exo.main');
+    launchCmd = launchCmd.replace(/ --frp-token '([^']*)'/, ' --frp-token "$1"');
+
     return [
         '@echo off',
+        'setlocal enabledelayedexpansion',
         'chcp 65001 >nul',
         'title Exo Node - ' + nodeId,
         'echo ========================================',
@@ -3125,7 +3314,7 @@ function generateWinScript(d) {
         '    set EXO_PYTHON=%VENV_PYTHON%',
         ') else (',
         '    where python >nul 2>&1',
-        '    if !errorlevel! equ 0 for /f "tokens=*" %%a in ("where python") do if not defined EXO_PYTHON set EXO_PYTHON=%%a',
+        '    if !errorlevel! equ 0 for /f "tokens=*" %%a in (\'where python\') do if not defined EXO_PYTHON set EXO_PYTHON=%%a',
         ')',
         'if not defined EXO_PYTHON (',
         '    echo [ERROR] Python not found.',
@@ -3153,7 +3342,7 @@ function generateWinScript(d) {
         ':: ---- Start node ----',
         'echo Starting node... Press Ctrl+C to stop.',
         'echo.',
-        '"%EXO_PYTHON%" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager ' + location.protocol + '//' + location.host,
+        launchCmd,
         '',
         'pause'
     ].join('\r\n');
@@ -3161,9 +3350,11 @@ function generateWinScript(d) {
 
 function generateLinuxScript(d) {
     var nodeId = d.node_id || 'node';
-    var token = d.frp_token || '';
-    var addr = d.server_addr || '<FRPS_SERVER_IP>';
-    var lport = d.local_port || 50051;
+    // 优先使用后端为该 node_id 生成的启动命令，保证参数与后端一致
+    var launchCmd = (d && d.launch_command) ? d.launch_command : buildLaunchCommand(d);
+    // Linux 脚本中把 python 替换为由脚本检测到的 Python
+    launchCmd = launchCmd.replace(/^python -m exo\.main/, '"$PYTHON_EXE" -m exo.main');
+
     return [
         '#!/bin/bash',
         'set -e',
@@ -3171,7 +3362,7 @@ function generateLinuxScript(d) {
         'echo "========================================"',
         'echo "  Exo Distributed Inference Framework"',
         'echo "  One-Click Node Launcher"',
-        'echo "  Node: ' + (d.node_id || 'unknown') + '"',
+        'echo "  Node: ' + nodeId + '"',
         'echo "========================================"',
         '',
         'cd "$(dirname "$0")"',
@@ -3215,24 +3406,24 @@ function generateLinuxScript(d) {
         'echo "Starting node..."',
         'echo "Press Ctrl+C to stop."',
         'echo ""',
-        '"$PYTHON_EXE" -m exo.main --disable-tui --discovery-module frp --node-id ' + nodeId + ' --node-port ' + lport + ' --frp-server-addr ' + addr + ' --frp-server-port ' + (d.bind_port || '7000') + ' --frp-token ' + token + ' --manager ' + location.protocol + '//' + location.host,
+        launchCmd,
     ].join('\n');
 }
 
 function refreshScript() {
-    var d = getSelectedNodeData();
-    if (!d) {
+    var ctx = buildCurrentScript();
+    if (!ctx) {
         document.getElementById('scriptContent').textContent = '请先选择一个节点';
         return;
     }
-    var script = currentOS === 'win' ? generateWinScript(d) : generateLinuxScript(d);
-    document.getElementById('scriptContent').textContent = script;
+    document.getElementById('scriptContent').textContent = ctx.script;
 }
 
 function downloadScript() {
-    var d = getSelectedNodeData();
-    if (!d) { showToast('请先选择节点'); return; }
-    var script = currentOS === 'win' ? generateWinScript(d) : generateLinuxScript(d);
+    var ctx = buildCurrentScript();
+    if (!ctx) { showToast('请先选择节点'); return; }
+    var d = ctx.data;
+    var script = ctx.script;
     var filename = currentOS === 'win' ? 'exo_node_' + (d.node_id || 'node') + '.bat' : 'exo_node_' + (d.node_id || 'node') + '.sh';
     var blob = new Blob([script], { type: 'text/plain;charset=utf-8' });
     var url = URL.createObjectURL(blob);
@@ -3244,19 +3435,14 @@ function downloadScript() {
     showToast('已下载: ' + filename);
 }
 
-function toggleSensitive() {
+async function toggleSensitive() {
     showSensitive = !showSensitive;
     const btn = document.getElementById('sensitiveToggle');
     btn.innerHTML = showSensitive
         ? '<i class="fas fa-eye"></i> 隐藏敏感信息'
         : '<i class="fas fa-eye-slash"></i> 显示敏感信息';
     if (connectData) renderConnectionInfo(connectData);
-}
-
-function escapeHtml(str) {
-    const d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
+    await updateCommandForSelectedNode();
 }
 
 // ==================== 账户设置 ====================

@@ -5,7 +5,7 @@
       "name": "默认管理员 Key",
       "description": "自动生成的默认 API Key，请妥善保管",
       "created_at": 1778577097.8564992,
-      "last_used_at": 1782960509.908544,
+      "last_used_at": 1785551979.2854884,
       "is_active": true,
       "permissions": [
         "*"
@@ -13,7 +13,8 @@
       "allowed_models": [
         "*"
       ],
-      "usage_count": 14
+      "usage_count": 18,
+      "user_id": null
     },
     {
       "key": "exo_sk_CY9KCYIzS1MG7I5APgXuX5GXM3ZFkexn",
@@ -28,7 +29,8 @@
       "allowed_models": [
         "*"
       ],
-      "usage_count": 0
+      "usage_count": 0,
+      "user_id": null
     }
   ]
 }

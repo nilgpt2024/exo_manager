@@ -339,10 +339,13 @@ def _get_available_models_for_inference() -> List[Dict]:
     数据来源（按优先级）：
     1. manager._allocation_registry - 分配注册表（含准确的首层节点信息）
     2. manager.connectors - 在线节点的 loaded_models
-    3. manager.nodes - 所有节点信息（fallback）
+    3. manager.nodes - 所有节点信息（fallback，仅 ONLINE 节点）
 
     每个模型附带 inference_url（首层节点推理地址），客户端可直连该地址发起推理，
     请求会自动在分片节点间传递，无需经过 exo_manager 代理。
+
+    ✅ 一致性保障：卸载/心跳更新后，优先用 connector.nodes 的最新 loaded_models
+    过滤掉 OFFLINE/超时离线 节点，避免分配到已卸载模型。
     """
     manager = _get_manager()
     if not manager:
@@ -350,22 +353,65 @@ def _get_available_models_for_inference() -> List[Dict]:
 
     models = []
     seen_models = set()
+    now = time.time()
 
     # ── 第一步：从分配注册表获取首层节点信息（最可靠的数据源）──
-    # key: base_model_id, value: (node_id, inference_url)
+    #    先做一次一致性校验：allocation_registry 中引用的节点如果 OFFLINE
+    #    或 loaded_models 中已经没有对应 base_id，则标记失效，等下一次
+    #    rebuild_allocation_registry 清理。
     first_layer_map = {}
     alloc_registry = getattr(manager, '_allocation_registry', {})
+    # 快速构建 { base_model_id: set(online_nodes_that_actually_have_it) } 用于过滤
+    online_node_models_by_base: Dict[str, set] = {}
+    for nid, conn in getattr(manager, 'connectors', {}).items():
+        ni = getattr(conn, 'node_info', None)
+        if ni is None or not _status_is_online(getattr(ni, 'status', None)):
+            continue
+        for mm in getattr(ni, 'loaded_models', []) or []:
+            mid = mm.get("model_id", "")
+            base = mid.split("::")[0] if "::" in mid else mid
+            if base:
+                online_node_models_by_base.setdefault(base, set()).add(nid)
+    # 再从 manager.nodes 补（有些场景 connectors 为空但 nodes 有）
+    for nid, ni in (getattr(manager, 'nodes', None) or {}).items():
+        if not _status_is_online(getattr(ni, 'status', None)):
+            continue
+        # 额外心跳超时过滤：> 90s 没心跳即使 ONLINE 也排除
+        hb = getattr(ni, 'last_heartbeat', 0) or 0
+        if hb and (now - hb) > 90:
+            continue
+        for mm in getattr(ni, 'loaded_models', []) or []:
+            mid = mm.get("model_id", "")
+            base = mid.split("::")[0] if "::" in mid else mid
+            if base:
+                online_node_models_by_base.setdefault(base, set()).add(nid)
+
     for base_model_id, alloc_info in alloc_registry.items():
         fl_node_id = alloc_info.get("first_layer_node_id", "")
         fl_url = alloc_info.get("inference_url", "")
-        if fl_node_id and fl_url:
+        # 一致性校验：首层节点必须在线，并且实际 loaded_models 中仍含有该 base
+        if fl_node_id and fl_url and fl_node_id in online_node_models_by_base.get(base_model_id, set()):
             first_layer_map[base_model_id] = (fl_node_id, fl_url)
+        else:
+            # 允许在非首层节点但 base 仍存在的情况：随便挑一个在线持有节点
+            holders = online_node_models_by_base.get(base_model_id)
+            if holders:
+                picked_node_id = next(iter(holders))
+                picked_node = (getattr(manager, 'connectors', {}).get(picked_node_id)
+                               or getattr(manager, 'nodes', {}).get(picked_node_id))
+                chat_url = getattr(getattr(picked_node, 'node_info', picked_node), 'chatgpt_url', None)
+                if chat_url:
+                    first_layer_map[base_model_id] = (picked_node_id, chat_url)
 
-    # ── 第二步：收集所有已加载的模型列表 ──
+    # ── 第二步：收集所有已加载的模型列表（只从真实 ONLINE 节点收集）──
     for node_id, connector in getattr(manager, 'connectors', {}).items():
         if not _status_is_online(connector.node_info.status):
             continue
-        for model in connector.node_info.loaded_models:
+        # 心跳>90s 过滤
+        hb = getattr(connector.node_info, 'last_heartbeat', 0) or 0
+        if hb and (now - hb) > 90:
+            continue
+        for model in connector.node_info.loaded_models or []:
             model_id = model.get("model_id", "unknown")
             if model_id not in seen_models:
                 seen_models.add(model_id)
@@ -376,20 +422,26 @@ def _get_available_models_for_inference() -> List[Dict]:
                     "type": "worker_instance" if "::" in model_id else "base",
                 })
 
-    # Fallback: 从 manager.nodes 补充
-    if not models and getattr(manager, 'nodes', None):
+    # Fallback: 从 manager.nodes 补充（同样严格 ONLINE + 心跳）
+    if getattr(manager, 'nodes', None):
         for node_id, node_info in manager.nodes.items():
-            if node_info.loaded_models:
-                for m in node_info.loaded_models:
-                    model_id = m.get("model_id", "unknown")
-                    if model_id not in seen_models:
-                        seen_models.add(model_id)
-                        models.append({
-                            "model_id": model_id,
-                            "node_id": node_id,
-                            "node_url": node_info.chatgpt_url,
-                            "type": "worker_instance" if "::" in model_id else "base",
-                        })
+            if not _status_is_online(getattr(node_info, 'status', None)):
+                continue
+            hb = getattr(node_info, 'last_heartbeat', 0) or 0
+            if hb and (now - hb) > 90:
+                continue
+            if not (node_info.loaded_models or []):
+                continue
+            for m in node_info.loaded_models or []:
+                model_id = m.get("model_id", "unknown")
+                if model_id not in seen_models:
+                    seen_models.add(model_id)
+                    models.append({
+                        "model_id": model_id,
+                        "node_id": node_id,
+                        "node_url": node_info.chatgpt_url,
+                        "type": "worker_instance" if "::" in model_id else "base",
+                    })
 
     # ── 第三步：为每个模型附加上首层推理地址 ──
     for m in models:
@@ -442,9 +494,14 @@ def _find_target_node(model_id: str) -> Optional[tuple]:
     # Fallback: 遍历所有在线节点的已加载模型
     candidate_nodes = []  # [(node_id, start_layer, url, full_model_id), ...]
     first_layer_nodes = []  # 所有首层节点（多副本场景可能有多个）
+    now = time.time()
 
     for node_id, connector in manager.connectors.items():
         if not _status_is_online(connector.node_info.status):
+            continue
+        # 心跳超时（>90s）的节点即使状态是 ONLINE，也认为已离线，避免选到僵死节点
+        hb = getattr(connector.node_info, 'last_heartbeat', 0) or 0
+        if hb and (now - hb) > 90:
             continue
         for m in connector.node_info.loaded_models:
             mid = m.get("model_id", "")
@@ -541,11 +598,14 @@ async def _proxy_to_node(
             ws_request_data["model_id"] = ws_request_data["model"]
 
         try:
-            async for chunk in await node_ws_manager.send_inference_request(
+            # send_inference_request 本身就是 AsyncGenerator，不能再 await，否则：
+            # TypeError: object async_generator can't be used in 'await' expression
+            ws_gen = node_ws_manager.send_inference_request(
                 node_id=node_id,
                 request_data=ws_request_data,
                 timeout=300.0
-            ):
+            )
+            async for chunk in ws_gen:
                 yield chunk
                 
                 try:
@@ -567,8 +627,9 @@ async def _proxy_to_node(
             latency_ms = (time.time() - start_time) * 1000
             
             manager = _get_manager()
-            if manager and hasattr(manager, 'load_balancer'):
-                manager.load_balancer.record_completion(
+            _lb = getattr(manager, 'load_balancer', None) if manager else None
+            if _lb is not None and hasattr(_lb, 'record_completion'):
+                _lb.record_completion(
                     node_id=node_id,
                     model_id=model_id,
                     success=True,
@@ -607,8 +668,9 @@ async def _proxy_to_node(
                 f"node={node_id}, model={model_id}, error={type(e).__name__}: {e}"
             )
             manager = _get_manager()
-            if manager and hasattr(manager, 'load_balancer'):
-                manager.load_balancer.record_completion(
+            _lb = getattr(manager, 'load_balancer', None) if manager else None
+            if _lb is not None and hasattr(_lb, 'record_completion'):
+                _lb.record_completion(
                     node_id=node_id,
                     model_id=model_id,
                     success=False,
@@ -638,13 +700,13 @@ async def _proxy_to_node(
 
     # 🔧 [修复] 当 chatgpt_url 指向不可达地址（如 FRP 远程 IP）时，
     #     自动 fallback 到本地 127.0.0.1（Manager 与节点同机部署场景）
-    # 注意：如果 chatgpt_api_port 是 FRP 映射端口（>=30000），说明节点通过 FRP 暴露，
-    #       manager 与节点不在同一机器，禁用本地 fallback。
+    # 注意：如果 chatgpt_api_port 是 FRP 映射端口（>=60000，一般 FRP/socat 高位映射），
+    #       说明节点通过公网穿透暴露，manager 与节点不在同一机器，禁用本地 fallback。
     _mgr_local = _get_manager()
     _local_endpoint = None
     if _mgr_local and node_id in _mgr_local.nodes:
         _ni = _mgr_local.nodes[node_id]
-        _is_frp_chat_port = _ni.chatgpt_api_port >= 30000
+        _is_frp_chat_port = _ni.chatgpt_api_port >= 60000
         if _ni.address not in ("127.0.0.1", "localhost", "0.0.0.0") and not _is_frp_chat_port:
             _local_endpoint = f"http://127.0.0.1:{_ni.chatgpt_api_port}/v1/chat/completions"
             logger.debug(f"🔧 [Proxy] 检测到远程地址，已准备本地 fallback: {node_endpoint} → {_local_endpoint}")
@@ -665,8 +727,9 @@ async def _proxy_to_node(
                 logger.error(f"[Proxy] 节点返回错误 {response.status_code}: {error_text[:200]}")
 
                 manager = _get_manager()
-                if manager and hasattr(manager, 'load_balancer'):
-                    manager.load_balancer.record_completion(
+                _lb = getattr(manager, 'load_balancer', None) if manager else None
+                if _lb is not None and hasattr(_lb, 'record_completion'):
+                    _lb.record_completion(
                         node_id=node_id,
                         model_id=model_id,
                         success=False,
@@ -722,8 +785,9 @@ async def _proxy_to_node(
             # HTTP 路径：流式结束后扣减额度（之前只有 WS 路径有扣减，HTTP 路径缺失）
             latency_ms = (time.time() - start_time) * 1000
             manager = _get_manager()
-            if manager and hasattr(manager, 'load_balancer'):
-                manager.load_balancer.record_completion(
+            _lb = getattr(manager, 'load_balancer', None) if manager else None
+            if _lb is not None and hasattr(_lb, 'record_completion'):
+                _lb.record_completion(
                     node_id=node_id,
                     model_id=model_id,
                     success=True,
@@ -810,8 +874,9 @@ async def _proxy_to_node(
         logger.error(f"[Proxy] 无法连接节点 {node_id}: {e}")
 
         manager = _get_manager()
-        if manager and hasattr(manager, 'load_balancer'):
-            manager.load_balancer.record_completion(
+        _lb = getattr(manager, 'load_balancer', None) if manager else None
+        if _lb is not None and hasattr(_lb, 'record_completion'):
+            _lb.record_completion(
                 node_id=node_id,
                 model_id=model_id,
                 success=False,
@@ -843,8 +908,9 @@ async def _proxy_to_node(
         logger.error(f"[Proxy] 节点响应超时 {node_id}: {e}")
 
         manager = _get_manager()
-        if manager and hasattr(manager, 'load_balancer'):
-            manager.load_balancer.record_completion(
+        _lb = getattr(manager, 'load_balancer', None) if manager else None
+        if _lb is not None and hasattr(_lb, 'record_completion'):
+            _lb.record_completion(
                 node_id=node_id,
                 model_id=model_id,
                 success=False,
@@ -876,8 +942,9 @@ async def _proxy_to_node(
         logger.error(f"[Proxy] 代理错误: {e}", exc_info=True)
 
         manager = _get_manager()
-        if manager and hasattr(manager, 'load_balancer'):
-            manager.load_balancer.record_completion(
+        _lb = getattr(manager, 'load_balancer', None) if manager else None
+        if _lb is not None and hasattr(_lb, 'record_completion'):
+            _lb.record_completion(
                 node_id=node_id,
                 model_id=model_id,
                 success=False,
@@ -908,8 +975,9 @@ async def _proxy_to_node(
     latency_ms = (time.time() - start_time) * 1000
     
     manager = _get_manager()
-    if manager and hasattr(manager, 'load_balancer'):
-        manager.load_balancer.record_completion(
+    _lb = getattr(manager, 'load_balancer', None) if manager else None
+    if _lb is not None and hasattr(_lb, 'record_completion'):
+        _lb.record_completion(
             node_id=node_id,
             model_id=model_id,
             success=True,

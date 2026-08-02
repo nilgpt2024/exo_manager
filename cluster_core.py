@@ -1976,7 +1976,8 @@ class EXOClusterManager:
         self,
         node_id: str,
         model_id: str,
-        success: bool
+        success: bool,
+        unloaded_model_ids: Optional[List[str]] = None
     ):
         """
         WebSocket 回调：Node 完成模型卸载
@@ -1986,14 +1987,42 @@ class EXOClusterManager:
         if success and node_id in self.nodes:
             node = self.nodes[node_id]
             
-            # 更新节点的已加载模型列表
-            node.loaded_models = [
-                m for m in node.loaded_models 
-                if m.get("model_id") != model_id
-            ]
+            # 精确移除：优先用 Node 显式上报的 unloaded_model_ids，
+            # 否则兜底用消息里的 model_id（兼容 base_id/full_id 两种）
+            removed_ids = set(unloaded_model_ids or [])
+            if model_id:
+                removed_ids.add(model_id)
+            # 兼容 qwen-3-0.6b 匹配 qwen-3-0.6b::worker-1
+            base_ids = {mid.split("::")[0] for mid in list(removed_ids)}
+            
+            def _should_keep(m: dict) -> bool:
+                mid = m.get("model_id", "")
+                if mid in removed_ids:
+                    return False
+                base = mid.split("::")[0] if "::" in mid else mid
+                if base in base_ids and any(
+                    (m2 in mid) for m2 in removed_ids if m2
+                ):
+                    return False
+                # 如果 unloaded_model_ids 非空，严格按这个集合 + 其 base 集合裁剪
+                if unloaded_model_ids:
+                    if base in base_ids:
+                        return False
+                return True
+            
+            before = {m.get("model_id", "") for m in node.loaded_models}
+            node.loaded_models = [m for m in node.loaded_models if _should_keep(m)]
+            after = {m.get("model_id", "") for m in node.loaded_models}
             node.last_heartbeat = time.time()
             
-            logger.info(f"🗑️ [WS-Callback] 节点 {node_id} 模型卸载成功: {model_id}")
+            logger.info(f"🗑️ [WS-Callback] 节点 {node_id} 模型卸载成功: {model_id} "
+                        f"(移除 {sorted(before - after)})")
+            
+            # 重建分配注册表，确保 _allocation_registry 立刻与真实节点状态一致
+            try:
+                self.rebuild_allocation_registry()
+            except Exception as reg_err:
+                logger.debug(f"[WS-Callback] 重建分配注册表失败（忽略）: {reg_err}")
             
             # 广播状态更新
             if self._broadcast_callback:
@@ -2002,6 +2031,8 @@ class EXOClusterManager:
                         "type": "model_unloaded",
                         "node_id": node_id,
                         "model_id": model_id,
+                        "unloaded_model_ids": sorted(before - after),
+                        "loaded_models_after": [m.get("model_id", "") for m in node.loaded_models],
                         "success": True
                     })
                 except Exception as e:
@@ -2036,7 +2067,8 @@ class EXOClusterManager:
         target_nodes: Optional[List[str]] = None,
         instance_id: Optional[str] = None,
         auto_instance: bool = False,
-        layer_memory_mb: Optional[float] = None
+        layer_memory_mb: Optional[float] = None,
+        ignore_used_memory: bool = False
     ) -> Dict:
         """
         将模型加载到集群（核心方法）- 支持多实例
@@ -2057,6 +2089,8 @@ class EXOClusterManager:
             instance_id: 实例ID（支持多实例，None表示默认）
             auto_instance: 是否自动生成实例ID
             layer_memory_mb: 每层预估显存(MB)，未指定时从模型库自动获取
+            ignore_used_memory: 忽略节点当前已使用显存（用于 rebalance 场景：
+                                已卸载旧分片后，used_mb 可能尚未清零，需按总显存重新分配）
             
         Returns:
             加载结果详情
@@ -2125,7 +2159,8 @@ class EXOClusterManager:
                 model_id=model_id,
                 total_layers=n_layers,
                 layer_memory_mb=layer_memory_mb,
-                strategy=strategy
+                strategy=strategy,
+                ignore_used_memory=ignore_used_memory
             )
             
             logger.info(f"📦 模型 {full_model_id} 分配方案:")
@@ -2144,7 +2179,13 @@ class EXOClusterManager:
                 }
 
             # Step 2: 过滤目标节点（如果指定）
-            if target_nodes:
+            if target_nodes is not None:
+                # target_nodes=[]（空列表，不是 None）也视为显式禁止使用任何节点 → 直接返回无可用
+                if len(target_nodes) == 0:
+                    return {
+                        "success": False,
+                        "error": "没有可用的目标节点（target_nodes 为空列表）"
+                    }
                 allocation.allocations = [
                     a for a in allocation.allocations 
                     if a["node_id"] in target_nodes
@@ -2674,11 +2715,14 @@ class EXOClusterManager:
             logger.warning(f"⚠️ [Rebalance] 模型 {model_id} 卸载旧分配未完全成功，仍尝试重新加载")
 
         # 重新加载，让智能分配器基于最新集群状态重新决策
+        # [FIX] rebalance 流程：先卸载旧分片再重新加载，因此 used_mb 可能尚未清零，
+        # 使用 ignore_used_memory=True 强制按节点总显存重新评估可用空间
         load_result = await self.load_model_to_cluster(
             model_id=model_id,
             model_path=model_path,
             n_layers=n_layers,
-            strategy="smart"
+            strategy="smart",
+            ignore_used_memory=True
         )
 
         return {

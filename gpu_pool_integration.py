@@ -192,10 +192,11 @@ class SmartAllocator:
         layer_memory_mb: float = 100.0,
         strategy: str = "smart",
         force_shard: bool = False,
-        nodes: Optional[List[Dict]] = None
+        nodes: Optional[List[Dict]] = None,
+        ignore_used_memory: bool = False
     ) -> ModelAllocation:
         """
-        智能分配入口（同步版本，供 preview 使用）
+        智能分配入口（同步版本，供 preview / rebalance 使用）
 
         Args:
             model_id: 模型标识符
@@ -204,6 +205,9 @@ class SmartAllocator:
             strategy: 分配策略 ('smart' | 'memory_weighted' | 'uniform' | 'performance_weighted')
             force_shard: 强制拆分（跳过单节点检查）
             nodes: 可选的外部节点列表（用于模拟分配），不传则使用当前在线节点
+            ignore_used_memory: Rebalance 模式专用。若为 True，则忽略节点当前已加载模型
+                                的显存占用（视为空节点），用于"先卸载再分配"的场景，
+                                避免旧分片占用导致 free_mb 偏小从而误判为 pending_more_nodes。
 
         Returns:
             ModelAllocation 包含完整的分配方案和决策元信息
@@ -212,6 +216,17 @@ class SmartAllocator:
             nodes = self.get_nodes_with_usage()
         if not nodes:
             raise ValueError("没有可用的在线节点")
+
+        # [FIX-Rebalance] rebalance_model 会先卸载旧分片再 allocate，此时旧 used_mb 是
+        # 历史遗留数据，不应该参与新分配方案的 free_mb / total_free_mem 计算。
+        if ignore_used_memory:
+            _adjusted = []
+            for n in nodes:
+                _copy = dict(n)
+                _copy["used_mb"] = 0.0
+                _copy["free_mb"] = float(_copy.get("memory_mb", 0))
+                _adjusted.append(_copy)
+            nodes = _adjusted
 
         # 计入运行时开销：KV Cache / 激活值 / CUDA 碎片 / 临时缓冲区等
         effective_layer_mb = layer_memory_mb * self.RUNTIME_OVERHEAD_RATIO
@@ -492,7 +507,15 @@ class SmartAllocator:
         return allocations
 
     def _legacy_allocate_by_performance(self, nodes, total_layers, layer_memory_mb):
-        """基于性能加权分配"""
+        """基于性能加权分配
+
+        [FIX] 原实现在 load_penalty 较大（rtx-3090 场景 score=31）或
+              score 取整导致最后节点分不到层时，会出现层数和 < total_layers
+              或 区间不闭合。这里：
+              1) score 归一化到 max(score, 0.01) 避免除零/负权重；
+              2) 非末尾节点保留至少后面 1 层，末尾节点吃掉所有剩余；
+              3) 最后兜底把剩余层加给末尾节点，保证严格闭合。
+        """
         scored_nodes = []
         for node in nodes:
             flops = node.get("flops", {})
@@ -502,15 +525,29 @@ class SmartAllocator:
             scored_nodes.append({**node, "score": score})
 
         scored_nodes.sort(key=lambda x: x["score"], reverse=True)
-        total_score = sum(n["score"] for n in scored_nodes)
+        raw_scores = [max(n["score"], 0.01) for n in scored_nodes]
+        total_score = sum(raw_scores)
+
         allocations = []
         current_layer = 0
-        for node in scored_nodes:
+        N = len(scored_nodes)
+        for idx, node in enumerate(scored_nodes):
             if current_layer >= total_layers:
                 break
-            weight = node["score"] / total_score
+
+            weight = raw_scores[idx] / total_score
             layers_for_node = max(1, int(total_layers * weight))
-            layers_for_node = min(layers_for_node, total_layers - current_layer)
+            is_last = idx == N - 1
+            if not is_last:
+                # 保留后面每个节点至少一层
+                remain_after = N - idx - 1
+                upper = max(1, total_layers - current_layer - remain_after)
+                layers_for_node = max(1, min(layers_for_node, upper))
+            else:
+                layers_for_node = total_layers - current_layer
+            # 钳制兜底
+            layers_for_node = max(1, min(layers_for_node, total_layers - current_layer))
+
             end_layer = current_layer + layers_for_node - 1
             allocations.append({
                 "node_id": node["node_id"], "start_layer": current_layer,
@@ -518,6 +555,15 @@ class SmartAllocator:
                 "address": node["address"]
             })
             current_layer = end_layer + 1
+
+        # 最终兜底：若取整/截断导致还有剩余，挂到末尾
+        if current_layer < total_layers and allocations:
+            last_alloc = allocations[-1]
+            remaining = total_layers - current_layer
+            last_alloc["end_layer"] += remaining
+            last_alloc["layers_count"] += remaining
+            current_layer += remaining
+
         return allocations
 
     # ============================================================
@@ -667,19 +713,37 @@ class SmartAllocator:
         lost_layers = lost_shard["end_layer"] - lost_shard["start_layer"] + 1
         total_layers = lost_shard.get("n_layers", lost_layers)
 
+        # [FIX] 动态估算每层显存：优先查模型库；找不到回退 100MB/层
+        # 避免硬编码 100MB/层 导致判断偏差（4GB 节点小模型/大模型误判可行性）
+        layer_memory_mb = 100.0
+        try:
+            from auto_model_allocator import get_model_library
+            _lib = get_model_library()
+            _spec = _lib.get(base_id) or _lib.get(model_id)
+            if _spec:
+                _lmb = _spec.get("layer_memory_mb") or (
+                    (_spec.get("parameters_mb") or 0) / total_layers if total_layers > 0 else None
+                )
+                if _lmb and _lmb > 0:
+                    layer_memory_mb = float(_lmb)
+        except Exception:
+            pass
+        layer_memory_mb = max(10.0, float(layer_memory_mb))
+
         logger.info(f"🔧 [FaultRecovery] 处理模型 {model_id}: "
-                   f"丢失 L{lost_shard['start_layer']}-L{lost_shard['end_layer']} ({lost_layers}层)")
+                   f"丢失 L{lost_shard['start_layer']}-L{lost_shard['end_layer']} ({lost_layers}层), "
+                   f"每层估算={layer_memory_mb:.0f}MB")
 
         # 策略1: 尝试找单个存活节点完整容纳整个模型
         single_node_result = self._try_migrate_to_single_node(
-            model_id, total_layers, alive_nodes
+            model_id, total_layers, alive_nodes, layer_memory_mb=layer_memory_mb
         )
         if single_node_result:
             return single_node_result
 
         # 策略2: 尝试用存活节点重新分担丢失的分片
         reshared_result = self._try_reshare_shard(
-            model_info, failed_node_id, alive_nodes
+            model_info, failed_node_id, alive_nodes, layer_memory_mb=layer_memory_mb
         )
         if reshared_result:
             return reshared_result
@@ -703,11 +767,13 @@ class SmartAllocator:
         self,
         model_id: str,
         total_layers: int,
-        alive_nodes: List[Dict]
+        alive_nodes: List[Dict],
+        layer_memory_mb: float = 100.0
     ) -> Optional[Dict]:
         """策略1: 尝试迁移到单个存活节点"""
-        layer_memory_mb = 100  # 每层预估显存
-        model_total_mb = total_layers * layer_memory_mb
+        # [FIX] 计入运行时开销（与 allocate() 保持一致），避免可行性判断偏乐观
+        effective_layer_mb = float(layer_memory_mb) * self.RUNTIME_OVERHEAD_RATIO
+        model_total_mb = total_layers * effective_layer_mb
 
         for node in sorted(alive_nodes, key=lambda n: n["free_mb"], reverse=True):
             if node["free_mb"] >= model_total_mb:
@@ -718,7 +784,7 @@ class SmartAllocator:
                         "model_id": model_id,
                         "shard_on_failed": {"start_layer": 0, "end_layer": total_layers - 1},
                         "recovery_action": "migrated",
-                        "recovery_detail": f"完整迁移到节点 {node['node_id']} (单节点加载)",
+                        "recovery_detail": f"完整迁移到节点 {node['node_id']} (单节点加载, 模型≈{model_total_mb:.0f}MB)",
                         "new_allocation": [{
                             "node_id": node["node_id"],
                             "start_layer": 0,
@@ -735,7 +801,8 @@ class SmartAllocator:
         self,
         model_info: Dict,
         failed_node_id: str,
-        alive_nodes: List[Dict]
+        alive_nodes: List[Dict],
+        layer_memory_mb: float = 100.0
     ) -> Optional[Dict]:
         """
         策略2: 用多个存活节点重新分担丢失的分片部分
@@ -746,15 +813,16 @@ class SmartAllocator:
         lost_start = model_info["shard"]["start_layer"]
         lost_end = model_info["shard"]["end_layer"]
         lost_count = lost_end - lost_start + 1
-        layer_memory_mb = 100
+        # [FIX] 与 allocate() 保持一致：乘以 RUNTIME_OVERHEAD_RATIO，避免判断偏乐观
+        effective_layer_mb = float(layer_memory_mb) * self.RUNTIME_OVERHEAD_RATIO
 
         # 计算需要多少空间
-        needed_mb = lost_count * layer_memory_mb
+        needed_mb = lost_count * effective_layer_mb
 
         # 找出有足够空间的存活节点组合
         candidates = [
             n for n in alive_nodes
-            if n["free_mb"] >= layer_memory_mb  # 至少能放一层
+            if n["free_mb"] >= effective_layer_mb  # 至少能放一层
         ]
 
         if not candidates or sum(n["free_mb"] for n in candidates) < needed_mb:
@@ -771,7 +839,7 @@ class SmartAllocator:
             if remaining_layers <= 0:
                 break
 
-            max_fit = int(node["free_mb"] / layer_memory_mb)
+            max_fit = int(node["free_mb"] / effective_layer_mb)
             layers_here = min(max_fit, remaining_layers)
 
             if layers_here <= 0:
@@ -996,7 +1064,8 @@ class GPUPoolIntegration:
         total_layers: int,
         layer_memory_mb: float = 100.0,
         strategy: str = "smart",
-        simulated_nodes: Optional[List[Dict]] = None
+        simulated_nodes: Optional[List[Dict]] = None,
+        ignore_used_memory: bool = False
     ) -> ModelAllocation:
         """
         预览模型分片分配方案
@@ -1012,6 +1081,9 @@ class GPUPoolIntegration:
                 - 'performance_weighted': 按性能加权（传统，始终拆分）
             simulated_nodes: 可选的模拟节点列表，用于离线场景下模拟分配；
                              提供时优先使用模拟节点，否则使用当前在线节点
+            ignore_used_memory: 忽略节点当前已使用显存，直接按总显存视作可用。
+                                用于 rebalance 场景（卸载旧分片后重新分配，
+                                Manager 端 used_mb 可能尚未清零）。
 
         Returns:
             分配方案对象 (ModelAllocation)，包含 allocation_type / decision_reason 等元信息
@@ -1032,7 +1104,8 @@ class GPUPoolIntegration:
                 total_layers=total_layers,
                 layer_memory_mb=layer_memory_mb,
                 strategy="smart",
-                nodes=nodes
+                nodes=nodes,
+                ignore_used_memory=ignore_used_memory
             )
         else:
             # 传统策略：用户明确选择时走原有逻辑（但通过 allocator 统一处理）
@@ -1042,7 +1115,8 @@ class GPUPoolIntegration:
                 layer_memory_mb=layer_memory_mb,
                 strategy=strategy,
                 force_shard=True,   # 非 smart 策略强制拆分，保持向后兼容
-                nodes=nodes
+                nodes=nodes,
+                ignore_used_memory=ignore_used_memory
             )
 
         if is_simulation:
@@ -1173,19 +1247,28 @@ class GPUPoolIntegration:
         # 按得分排序
         scored_nodes.sort(key=lambda x: x["score"], reverse=True)
         
-        # 使用类似内存加权的分配逻辑
-        total_score = sum(n["score"] for n in scored_nodes)
+        # 使用类似内存加权的分配逻辑，但保证严格闭合（同 SmartAllocator._legacy_allocate_by_performance 的修复）
+        raw_scores = [max(n["score"], 0.01) for n in scored_nodes]
+        total_score = sum(raw_scores)
         
         allocations = []
         current_layer = 0
+        N = len(scored_nodes)
         
-        for node in scored_nodes:
+        for idx, node in enumerate(scored_nodes):
             if current_layer >= total_layers:
                 break
             
-            weight = node["score"] / total_score
+            weight = raw_scores[idx] / total_score
             layers_for_node = max(1, int(total_layers * weight))
-            layers_for_node = min(layers_for_node, total_layers - current_layer)
+            is_last = idx == N - 1
+            if not is_last:
+                remain_after = N - idx - 1
+                upper = max(1, total_layers - current_layer - remain_after)
+                layers_for_node = max(1, min(layers_for_node, upper))
+            else:
+                layers_for_node = total_layers - current_layer
+            layers_for_node = max(1, min(layers_for_node, total_layers - current_layer))
             
             end_layer = current_layer + layers_for_node - 1
             
@@ -1199,6 +1282,13 @@ class GPUPoolIntegration:
             
             current_layer = end_layer + 1
         
+        # 末尾兜底
+        if current_layer < total_layers and allocations:
+            last_alloc = allocations[-1]
+            remaining = total_layers - current_layer
+            last_alloc["end_layer"] += remaining
+            last_alloc["layers_count"] += remaining
+
         return allocations
     
     async def execute_allocation(

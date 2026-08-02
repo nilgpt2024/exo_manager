@@ -4067,8 +4067,9 @@ class NodeWSManager:
                 model_id = data.get("model_id", "")
                 node_id_resp = data.get("node_id", node_id)
                 success = data.get("success", False)
+                unloaded_model_ids = data.get("unloaded_model_ids") or []
                 
-                logger.info(f"[NodeWS] 🗑️ 模型卸载完成: model={model_id}, node={node_id_resp}, success={success}")
+                logger.info(f"[NodeWS] 🗑️ 模型卸载完成: model={model_id}, node={node_id_resp}, success={success}, removed={unloaded_model_ids or '[未提供]'}")
                 
                 # 通知 cluster_core（如果可用）
                 if manager and hasattr(manager, '_on_model_unload_completed'):
@@ -4076,7 +4077,8 @@ class NodeWSManager:
                         await manager._on_model_unload_completed(
                             node_id=node_id_resp,
                             model_id=model_id,
-                            success=success
+                            success=success,
+                            unloaded_model_ids=unloaded_model_ids
                         )
                     except Exception as e:
                         logger.warning(f"[NodeWS] ⚠️ 回调失败: {e}")
@@ -4088,9 +4090,20 @@ class NodeWSManager:
                 
                 # 更新节点信息
                 if manager and node_id in manager.nodes:
+                    before = {m.get("model_id", "") for m in manager.nodes[node_id].loaded_models}
                     manager.nodes[node_id].loaded_models = loaded_models
+                    after = {m.get("model_id", "") for m in loaded_models}
                     if gpu_memory:
                         manager.nodes[node_id].device_info["gpu_memory"] = gpu_memory
+                    
+                    # 状态变化时主动重建 _allocation_registry，避免空列表后幽灵数据残留
+                    if before != after:
+                        logger.info(f"[NodeWS] 🔁 节点 {node_id} 模型状态变化: {sorted(before)} → {sorted(after)}")
+                        try:
+                            if hasattr(manager, 'rebuild_allocation_registry'):
+                                manager.rebuild_allocation_registry()
+                        except Exception as reg_err:
+                            logger.debug(f"[NodeWS] 重建分配注册表失败（忽略）: {reg_err}")
                     
                     # 广播状态更新
                     if manager._broadcast_callback:
@@ -4651,8 +4664,21 @@ async def ignore_vite_request(path: str):
     return Response(status_code=204)  # No Content
 
 @app.get("/admin", response_class=HTMLResponse)
-async def serve_login_page():
-    """提供管理员登录页面"""
+async def serve_admin_root(request: Request):
+    """管理员入口：已登录 admin 直接跳 dashboard，否则给登录页"""
+    from auth_manager import get_auth_manager
+    from fastapi.responses import RedirectResponse
+
+    session_token = request.cookies.get("session_token", "")
+    if session_token:
+        auth_mgr = get_auth_manager()
+        user = auth_mgr.validate_session(session_token)
+        if user and user.role == "admin":
+            return RedirectResponse(url="/admin/dashboard", status_code=303)
+        if user and user.role != "admin":
+            # 已登录普通用户，跳去自己的 dashboard，别留 admin 登录页
+            return RedirectResponse(url="/user/dashboard", status_code=303)
+
     html_file = Path(__file__).parent / "static" / "login.html"
     if html_file.exists():
         return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
@@ -4660,8 +4686,20 @@ async def serve_login_page():
 
 
 @app.get("/admin/login", response_class=HTMLResponse)
-async def serve_admin_login_page():
-    """提供管理员登录页面 (/admin/login)"""
+async def serve_admin_login_page(request: Request):
+    """提供管理员登录页面 (/admin/login) —— 已登录 admin 直接跳 dashboard"""
+    from auth_manager import get_auth_manager
+    from fastapi.responses import RedirectResponse
+
+    session_token = request.cookies.get("session_token", "")
+    if session_token:
+        auth_mgr = get_auth_manager()
+        user = auth_mgr.validate_session(session_token)
+        if user and user.role == "admin":
+            return RedirectResponse(url="/admin/dashboard", status_code=303)
+        if user and user.role != "admin":
+            return RedirectResponse(url="/user/dashboard", status_code=303)
+
     html_file = Path(__file__).parent / "static" / "login.html"
     if html_file.exists():
         return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
@@ -4669,17 +4707,45 @@ async def serve_admin_login_page():
 
 
 @app.get("/admin/dashboard", response_class=HTMLResponse)
-async def serve_admin_dashboard():
-    """提供管理员后台页面"""
-    html_file = Path(__file__).parent / "static" / "index.html"
-    if html_file.exists():
-        return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
-    return HTMLResponse(content="<h1>Dashboard not found</h1>", status_code=404)
+async def serve_admin_dashboard(request: Request):
+    """提供管理员后台页面 —— 严格校验 session_token + role=admin
+       （防止 user 登录后直接输 URL 进入管理员页）
+    """
+    from auth_manager import get_auth_manager
+    from fastapi.responses import RedirectResponse
+
+    session_token = request.cookies.get("session_token", "")
+    if session_token:
+        auth_mgr = get_auth_manager()
+        user = auth_mgr.validate_session(session_token)
+        if user and user.role == "admin":
+            html_file = Path(__file__).parent / "static" / "index.html"
+            if html_file.exists():
+                return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
+            return HTMLResponse(content="<h1>Dashboard not found</h1>", status_code=404)
+        if user and user.role != "admin":
+            # 已登录的普通用户 → 跳回用户自己的 dashboard（不要留在 403）
+            return RedirectResponse(url="/user/dashboard", status_code=303)
+
+    # 未登录 → 跳管理员登录页
+    return RedirectResponse(url="/admin/login", status_code=303)
 
 
 @app.get("/login", response_class=HTMLResponse)
-async def serve_user_login_page():
-    """提供普通用户登录页面"""
+async def serve_user_login_page(request: Request):
+    """提供普通用户登录页面 —— admin 已登录直接跳管理后台，user 已登录跳用户页"""
+    from auth_manager import get_auth_manager
+    from fastapi.responses import RedirectResponse
+
+    session_token = request.cookies.get("session_token", "")
+    if session_token:
+        auth_mgr = get_auth_manager()
+        user = auth_mgr.validate_session(session_token)
+        if user and user.role == "admin":
+            return RedirectResponse(url="/admin/dashboard", status_code=303)
+        if user and user.role != "admin":
+            return RedirectResponse(url="/user/dashboard", status_code=303)
+
     html_file = Path(__file__).parent / "static" / "user_login.html"
     if html_file.exists():
         return HTMLResponse(content=html_file.read_text(encoding='utf-8'))
@@ -4691,26 +4757,30 @@ async def serve_user_login_page():
 
 
 @app.get("/login.html", response_class=HTMLResponse)
-async def serve_user_login_page_html():
+async def serve_user_login_page_html(request: Request):
     """提供普通用户登录页面 (.html后缀兼容)"""
-    return await serve_user_login_page()
+    return await serve_user_login_page(request)
 
 
 @app.get("/user/login", response_class=HTMLResponse)
-async def serve_user_login_page_alias():
+async def serve_user_login_page_alias(request: Request):
     """普通用户登录页别名 (保持兼容)"""
-    return await serve_user_login_page()
+    return await serve_user_login_page(request)
 
 
 @app.get("/user/dashboard", response_class=HTMLResponse)
 async def serve_user_dashboard(request: Request):
-    """普通用户仪表板 (独立URL)"""
+    """普通用户仪表板 (独立URL) —— admin 误入直接跳管理后台"""
     from auth_manager import get_auth_manager
+    from fastapi.responses import RedirectResponse
 
     session_token = request.cookies.get("session_token", "")
     if session_token:
         auth_mgr = get_auth_manager()
         user = auth_mgr.validate_session(session_token)
+        if user and user.role == "admin":
+            # 管理员访问用户页 → 回到管理后台
+            return RedirectResponse(url="/admin/dashboard", status_code=303)
         if user and user.role != "admin":
             user_html = Path(__file__).parent / "static" / "user.html"
             if user_html.exists():
@@ -4719,7 +4789,7 @@ async def serve_user_dashboard(request: Request):
     # 未登录或非用户角色，重定向到用户登录页
     login_html = Path(__file__).parent / "static" / "user_login.html"
     if login_html.exists():
-        return HTMLResponse(content=login_html.read_text(encoding='utf-8'))
+        return RedirectResponse(url="/user/login", status_code=303)
     return HTMLResponse(content="<h1>Please login first</h1>", status_code=403)
 
 @app.get("/", response_class=HTMLResponse)
