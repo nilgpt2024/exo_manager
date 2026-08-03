@@ -59,7 +59,7 @@ class TriggerConfig:
     MIN_INTERVAL_SECONDS: int = 60         # 最小间隔：60秒
 
     # 分配策略
-    DEFAULT_STRATEGY: str = "active_passive"  # 默认使用HA模式
+    DEFAULT_STRATEGY: str = "uniform"  # 默认使用均匀分配模式
     AUTO_EXECUTE: bool = True             # 是否自动执行（还是只生成方案）
 
     # 启动行为
