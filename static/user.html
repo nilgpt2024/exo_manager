@@ -2800,7 +2800,23 @@ function getMyNodesKey() {
 function loadMyNodes() {
     try {
         var saved = localStorage.getItem(getMyNodesKey());
-        if (saved) myNodes = JSON.parse(saved);
+        if (saved) {
+            myNodes = JSON.parse(saved);
+            // 🧳 兼容旧版本默认值：之前硬编码 memory_limit_gb=4.0，
+            //    升级后如果还是恰好等于旧默认值 4.0 且没有用户显式修改标识 → 重置为 null（不限制）
+            if (Array.isArray(myNodes)) {
+                var schemaVer = parseInt(localStorage.getItem('exo_nodes_schema_v') || '0', 10) || 0;
+                if (schemaVer < 1) {
+                    for (var i = 0; i < myNodes.length; i++) {
+                        if (myNodes[i] && myNodes[i].memory_limit_gb === 4.0) {
+                            myNodes[i].memory_limit_gb = null;
+                        }
+                    }
+                    localStorage.setItem('exo_nodes_schema_v', '1');
+                    saveMyNodes();
+                }
+            }
+        }
         else initDefaultNodes();
     } catch (e) {
         initDefaultNodes();
@@ -2853,7 +2869,7 @@ function addNode() {
         node_id: newId,
         local_port: 50051,
         label: label,
-        memory_limit_gb: 4.0  // ✨ 默认每节点 4GB 显存限制
+        memory_limit_gb: null  // 默认不限制（按真实GPU），用户手动配置后才追加 --memory-limit
     });
     saveMyNodes();
     renderNodeTabs();
@@ -2881,10 +2897,11 @@ function getSelectedNodeData() {
     if (!myNodes || !myNodes[selectedNodeIndex]) return null;
     var node = myNodes[selectedNodeIndex];
     // 基于 API 返回的 connectData + 当前节点的 node_id / port / memory_limit_gb 合并
+    // ⚠️ memory_limit_gb 只有用户明确配置了>0 才保留；没配置就留 null，命令里不出现 --memory-limit
     var d = Object.assign({}, connectData, {
         node_id: node.node_id,
         local_port: node.local_port,
-        memory_limit_gb: node.memory_limit_gb != null ? node.memory_limit_gb : 4.0
+        memory_limit_gb: (node.memory_limit_gb != null && parseFloat(node.memory_limit_gb) > 0) ? node.memory_limit_gb : null
     });
     return d;
 }
@@ -2920,10 +2937,10 @@ function renderNodeTabs() {
                 '</div>' +
                 '<div class="node-tab-port-row">' +
                     '<span class="node-tab-port-label">显存:</span>' +
-                    '<input type="number" class="node-tab-port-input" value="' + (n.memory_limit_gb != null ? n.memory_limit_gb : 4.0) + '"' +
-                    ' min="0" max="512" step="0.5"' +
+                    '<input type="number" class="node-tab-port-input" value="' + (n.memory_limit_gb != null ? n.memory_limit_gb : '') + '"' +
+                    ' min="0" max="512" step="0.5" placeholder="不限制"' +
                     ' onclick="event.stopPropagation()" onchange="changeNodeMemoryLimit(' + i + ', this.value)"' +
-                    ' title="每节点显存上限(GB)，设为0=按真实GPU大小；默认 4GB">' +
+                    ' title="每节点显存上限(GB)，留空或0=按真实GPU大小（命令里不出现--memory-limit）">' +
                     '<span class="node-tab-port-label" style="margin-left:2px;">GB</span>' +
                 '</div>' +
                 (myNodes.length > 1 ?
@@ -2962,19 +2979,25 @@ function changeNodeLabel(index, value) {
 }
 
 async function changeNodeMemoryLimit(index, value) {
-    var gb = parseFloat(value);
-    if (isNaN(gb) || gb < 0) {
-        showToast('显存限制必须是 >= 0 的数字(GB)');
-        return;
-    }
-    if (gb > 512) {
-        showToast('显存限制不能超过 512 GB');
-        return;
+    // 空字符串或 NaN → 表示用户清空配置（不启用显存限制，按真实GPU大小）
+    var raw = (value == null ? '' : String(value)).trim();
+    var gb = null;
+    if (raw !== '') {
+        gb = parseFloat(raw);
+        if (isNaN(gb) || gb < 0) {
+            showToast('显存限制必须是空(取消)或 >= 0 的数字(GB)');
+            return;
+        }
+        if (gb > 512) {
+            showToast('显存限制不能超过 512 GB');
+            return;
+        }
+        if (gb === 0) gb = null;  // 0 和空 等价 → 都表示不限制
     }
     myNodes[index].memory_limit_gb = gb;
     saveMyNodes();
     nodeConnCache.delete(myNodes[index].node_id);
-    showToast(gb > 0 ? ('显存限制已设为: ' + gb + ' GB') : '显存限制已取消（按真实GPU大小）');
+    showToast(gb != null ? ('显存限制已设为: ' + gb + ' GB') : '显存限制已取消（按真实GPU大小）');
     if (index === selectedNodeIndex) {
         await updateCommandForSelectedNode();
     }
@@ -2985,10 +3008,11 @@ async function updateCommandForSelectedNode() {
     if (!node || !connectData) return;
 
     // 以基础连接信息为底，叠加当前选中节点的 node_id / port / memory_limit_gb
+    // ⚠️ memory_limit_gb 默认 null：用户明确配置>0 才追加 --memory-limit，没配置就不出现
     var d = Object.assign({}, connectData, {
         node_id: node.node_id,
         local_port: node.local_port,
-        memory_limit_gb: node.memory_limit_gb != null ? node.memory_limit_gb : 4.0
+        memory_limit_gb: (node.memory_limit_gb != null && parseFloat(node.memory_limit_gb) > 0) ? node.memory_limit_gb : null
     });
 
     // 向后端获取该节点专属的 remote_port / launch_command（remote_port 按 node_id 哈希计算）
@@ -2996,10 +3020,19 @@ async function updateCommandForSelectedNode() {
     var memGb = d.memory_limit_gb;
     if (nodeInfo && nodeInfo.launch_command) {
         d = Object.assign(d, nodeInfo);
-        // [MEMORY LIMIT] 后端生成的 launch_command 不含 --memory-limit，前端补全
+        // [MEMORY LIMIT] 后端生成的 launch_command 不含 --memory-limit，前端按需补全（>0 才加）
         d.launch_command = ensureMemoryLimitInCmd(nodeInfo.launch_command, memGb);
     } else {
         d.launch_command = buildLaunchCommand(d);
+    }
+
+    // ✨ 1. 渲染到页面前，统一覆盖 --manager → 保证页面显示的命令和复制/下载的完全一致
+    //    （之前只在 getFinalNodeData() 覆盖，导致页面显示的是后端原始命令，和复制按钮不一致）
+    var realOrigin = location.protocol + '//' + location.host;
+    if (d.launch_command && d.launch_command.indexOf('--manager ') !== -1) {
+        d.launch_command = d.launch_command.replace(/--manager\s+\S+/, '--manager ' + realOrigin);
+    } else if (d.launch_command) {
+        d.launch_command = d.launch_command.trim() + ' --manager ' + realOrigin;
     }
 
     document.getElementById('launchCommand').textContent = d.launch_command || '--';
@@ -3083,7 +3116,7 @@ async function loadConnectionInfo() {
                 node_id: baseId + deviceTag,
                 local_port: 50051,
                 label: '我的设备',
-                memory_limit_gb: 4.0
+                memory_limit_gb: null
             }];
             saveMyNodes();
         }
