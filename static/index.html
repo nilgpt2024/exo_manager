@@ -6814,10 +6814,24 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             }
         }
 
-        /** 从 custom_models.json 的 repo 键收集所有引擎类型，动态填充下拉框 */
+        /** 填充引擎类型建议列表（下拉选择 + 手动输入） */
         async function populateEngineTypeOptions() {
-            const select = document.getElementById('customEngineType');
-            if (!select) return;
+            const input = document.getElementById('customEngineType');
+            let datalist = document.getElementById('customEngineTypeList');
+            if (!input) return;
+
+            // 默认支持的引擎类型白名单
+            const defaultEngines = [
+                'PyTorchInferenceEngine',
+                'PyTorchLlama3InferenceEngine',
+                'PyTorchQwen3InferenceEngine',
+                'PyTorchQwen3VLInferenceEngine',
+                'PyTorchQwen3ASRInferenceEngine',
+                'PyTorchQwen3TTSInferenceEngine',
+                'PyTorchQwen2_5VlInferenceEngine',
+                'PyTorchUnlimitedOCRInferenceEngine',
+                'DummyInferenceEngine'
+            ];
 
             try {
                 let data = window._customModelsCache;
@@ -6829,8 +6843,8 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     }
                 }
 
-                // 收集所有已用引擎类型
-                const engineSet = new Set();
+                // 收集 custom_models.json 中已使用的引擎类型
+                const engineSet = new Set(defaultEngines);
                 if (data?.models) {
                     for (const m of Object.values(data.models)) {
                         if (m.repo) {
@@ -6839,21 +6853,27 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                     }
                 }
 
-                // 填充下拉框
-                select.innerHTML = '';
-                if (engineSet.size === 0) {
-                    select.innerHTML = '<option value="">(无可用引擎)</option>';
-                    return;
+                // 创建/清空 datalist
+                if (!datalist) {
+                    datalist = document.createElement('datalist');
+                    datalist.id = 'customEngineTypeList';
+                    input.setAttribute('list', 'customEngineTypeList');
+                    input.parentNode.appendChild(datalist);
                 }
-                // 按名称排序
+                datalist.innerHTML = '';
+
+                // 按名称排序并填充建议
                 const sorted = [...engineSet].sort();
                 sorted.forEach(engine => {
                     const opt = document.createElement('option');
                     opt.value = engine;
-                    // 友好显示名：去掉 InferenceEngine 后缀
-                    opt.textContent = engine.replace(/InferenceEngine$/, '');
-                    select.appendChild(opt);
+                    datalist.appendChild(opt);
                 });
+
+                // 如果没有当前值，默认选中通用 PyTorch 引擎
+                if (!input.value) {
+                    input.value = 'PyTorchInferenceEngine';
+                }
             } catch (e) {
                 console.error('加载引擎类型失败:', e);
             }
@@ -6878,7 +6898,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
             const title = document.getElementById('customModelDialogTitle');
             const form = document.getElementById('customModelForm');
 
-            // 动态填充引擎类型下拉框（从 custom_models.json 的 repo 键收集）
+            // 动态填充引擎类型建议列表（支持选择或手动输入）
             await populateEngineTypeOptions();
 
             if (mode === 'add') {
@@ -6905,7 +6925,7 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
                 const firstEngine = Object.keys(repoObj)[0] || '';
 
                 document.getElementById('customRepo').value = firstRepo;
-                // 编辑模式：选中已有引擎（populateEngineTypeOptions 已填充选项）
+                // 编辑模式：回显已有引擎
                 if (firstEngine) {
                     document.getElementById('customEngineType').value = firstEngine;
                 }
@@ -8874,10 +8894,11 @@ curl -X POST &lt;首层节点地址&gt;/v1/chat/completions \\
 
                         <div class="form-group">
                             <label><i class="fas fa-cog"></i> 引擎类型</label>
-                            <select id="customEngineType"
-                                    style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;">
-                                <option value="">-- 从配置文件加载 --</option>
-                            </select>
+                            <input type="text" id="customEngineType" list="customEngineTypeList"
+                                   placeholder="可选择建议项或手动输入"
+                                   style="width:100%; padding:0.7rem; border:1px solid var(--gray-300); border-radius:8px; font-size:0.95rem;" />
+                            <datalist id="customEngineTypeList"></datalist>
+                            <small style="color:var(--gray-500);">支持从建议中选择或直接输入完整类名</small>
                         </div>
                     </div>
 
