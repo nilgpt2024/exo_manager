@@ -500,7 +500,7 @@ class FRPServerManager:
 
     @staticmethod
     def calculate_remote_port(node_id: str, service: str = "") -> int:
-        """根据 node_id 哈希计算远程端口 (30000-50000)
+        """根据 node_id 哈希计算远程端口 (40000-50000)
 
         Args:
             node_id: 节点 ID
@@ -508,7 +508,7 @@ class FRPServerManager:
         """
         hash_input = f"{node_id}:{service}" if service else node_id
         hash_val = int(hashlib.md5(hash_input.encode()).hexdigest()[:8], 16)
-        return 30000 + (hash_val % 20000)
+        return 40000 + (hash_val % 10000)
 
     # ==================== 客户端配置生成 ====================
 

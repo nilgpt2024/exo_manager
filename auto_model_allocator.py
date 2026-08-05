@@ -98,8 +98,11 @@ def _load_model_library() -> Dict[str, ModelSpec]:
 
         for key, card in model_cards.items():
             alloc = card.get("allocation", {})
+            repo = card.get("repo", {})
+            if not repo:
+                continue
             library[key] = ModelSpec(
-                model_id=card["repo"][list(card["repo"].keys())[0]],
+                model_id=key,
                 pretty_name=pretty_names.get(key, key),
                 total_layers=card.get("layers", 0),
                 layer_memory_mb=alloc.get("layer_memory_mb", 100),

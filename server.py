@@ -2195,6 +2195,14 @@ async def add_custom_model(request: Request):
 
         save_custom_models()
 
+        # 模型配置变化后，强制自动分配器重新评估（确保新模型被考虑）
+        global _auto_trigger
+        if _auto_trigger is not None:
+            try:
+                await _auto_trigger.manual_trigger(reason=f"添加自定义模型 {model_id} 后重新评估", force=True)
+            except Exception as e:
+                logger.warning(f"[Models] 添加模型后触发自动分配失败: {e}")
+
         logger.info(f"[Models] 添加自定义模型: {model_id} ({pretty_name or model_id})")
 
         return {
@@ -2253,6 +2261,14 @@ async def update_custom_model(request: Request):
 
         save_custom_models()
 
+        # 模型配置变化后，强制自动分配器重新评估
+        global _auto_trigger
+        if _auto_trigger is not None:
+            try:
+                await _auto_trigger.manual_trigger(reason=f"更新自定义模型 {model_id} 后重新评估", force=True)
+            except Exception as e:
+                logger.warning(f"[Models] 更新模型后触发自动分配失败: {e}")
+
         logger.info(f"[Models] 更新自定义模型: {model_id}")
 
         return {
@@ -2288,6 +2304,14 @@ async def delete_custom_model(request: Request):
             del custom_pretty_names[model_id]
         
         save_custom_models()
+
+        # 模型配置变化后，强制自动分配器重新评估
+        global _auto_trigger
+        if _auto_trigger is not None:
+            try:
+                await _auto_trigger.manual_trigger(reason=f"删除自定义模型 {model_id} 后重新评估", force=True)
+            except Exception as e:
+                logger.warning(f"[Models] 删除模型后触发自动分配失败: {e}")
         
         logger.info(f"[Models] 删除自定义模型: {model_id}")
         
