@@ -1529,6 +1529,18 @@ class EXOClusterManager:
             except Exception as e:
                 logger.warning(f"⚠️ [Unload] 同步节点 {node_id} 模型状态失败: {e}")
 
+    def is_node_available_for_inference(self, node_info: EXONodeInfo) -> bool:
+        """判断节点是否可用于推理调度（在线且心跳未超时）"""
+        if node_info.status != NodeStatus.ONLINE:
+            return False
+        # 从未有过心跳的节点视为不可用
+        if node_info.last_heartbeat <= 0:
+            return False
+        # 心跳超时 > 90s 的节点视为不可用
+        if time.time() - node_info.last_heartbeat > 90:
+            return False
+        return True
+
     def get_model_instances(self, model_id: str) -> List[Dict[str, Any]]:
         """
         获取模型的所有实例信息
@@ -1540,42 +1552,48 @@ class EXOClusterManager:
             实例信息列表
         """
         instances = []
-        
+
         for node_id, node_info in self.nodes.items():
+            # 过滤掉离线/超时节点，避免返回幽灵模型实例
+            if not self.is_node_available_for_inference(node_info):
+                continue
             for model in node_info.loaded_models:
                 mid = model.get("model_id", "")
                 if mid == model_id or mid.startswith(f"{model_id}::"):
                     instance_id = "default"
                     if "::" in mid:
                         instance_id = mid.split("::", 1)[1]
-                    
+
                     instances.append({
                         "node_id": node_id,
                         "full_model_id": mid,
                         "instance_id": instance_id,
                         "shard": model.get("shard", {})
                     })
-        
+
         return instances
-    
+
     def get_all_instances_summary(self) -> Dict[str, int]:
         """
         获取所有模型的实例数量摘要
-        
+
         Returns:
             {model_id: instance_count}
         """
         summary = {}
-        
+
         for node_info in self.nodes.values():
+            # 过滤掉离线/超时节点，避免统计幽灵模型实例
+            if not self.is_node_available_for_inference(node_info):
+                continue
             for model in node_info.loaded_models:
                 mid = model.get("model_id", "")
                 base_model_id = mid.split("::")[0] if "::" in mid else mid
-                
+
                 if base_model_id not in summary:
                     summary[base_model_id] = 0
                 summary[base_model_id] += 1
-        
+
         return summary
     
     async def initialize(self):

@@ -1423,12 +1423,12 @@ async def health_check_node(node_id: str, request: Request):
     is_healthy = await connector.health_check()
     node_info = manager.nodes[node_id]
 
-    if is_healthy:
-        # 始终更新心跳时间戳，避免心跳监控误判为离线
-        node_info.last_heartbeat = time.time()
+    # 节点主动发送心跳即证明存活，始终更新时间戳
+    node_info.last_heartbeat = time.time()
 
-        # 心跳成功时恢复离线节点的在线状态
-        if node_info.status == NodeStatus.OFFLINE:
+    if is_healthy:
+        # 心跳成功时恢复离线/错误节点的在线状态
+        if node_info.status in (NodeStatus.OFFLINE, NodeStatus.ERROR, NodeStatus.CONNECTING):
             old_status = node_info.status.value
             node_info.status = NodeStatus.ONLINE
             node_info.error_message = ""
@@ -2029,6 +2029,9 @@ async def list_models():
     seen_full_ids = set()
     
     for node_id, node_info in manager.nodes.items():
+        # 过滤掉离线/心跳超时节点，避免 API 返回已不可达的幽灵模型
+        if hasattr(manager, 'is_node_available_for_inference') and not manager.is_node_available_for_inference(node_info):
+            continue
         for model in node_info.loaded_models:
             model_id = model.get("model_id", "unknown")
             shard = model.get("shard", {})

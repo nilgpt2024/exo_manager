@@ -51,7 +51,7 @@
     "fara-7b": {
       "layers": 28,
       "repo": {
-        "PyTorchQwen2_5VlInferenceEngine": "microsoft/Fara-7B-INT8"
+        "PyTorchQwen2_5VlInferenceEngine": "microsoft/Fara-7B"
       },
       "allocation": {
         "layer_memory_mb": 560,

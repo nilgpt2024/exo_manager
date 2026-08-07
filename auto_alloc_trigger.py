@@ -31,6 +31,7 @@
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Any, Optional, Callable, Tuple
@@ -40,31 +41,41 @@ from enum import Enum
 logger = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """从环境变量读取布尔值"""
+    value = os.getenv(name, "").lower()
+    if value in ("true", "1", "yes", "on"):
+        return True
+    if value in ("false", "0", "no", "off"):
+        return False
+    return default
+
+
 # ============================================================
 #  配置常量
 # ============================================================
 
 class TriggerConfig:
-    """触发器配置"""
+    """触发器配置（支持环境变量覆盖）"""
     # 是否启用自动分配
-    ENABLED: bool = True
+    ENABLED: bool = _env_bool("EXO_AUTO_TRIGGER_ENABLED", False)
 
     # 触发条件
-    MIN_ONLINE_NODES: int = 1              # 最少需要几个在线节点才触发
-    NODE_COUNT_CHANGE_THRESHOLD: int = 1   # 节点数变化超过此值才触发
-    MEMORY_CHANGE_RATIO: float = 0.20      # 显存变化超过20%才触发
+    MIN_ONLINE_NODES: int = int(os.getenv("EXO_AUTO_TRIGGER_MIN_ONLINE_NODES", "1"))              # 最少需要几个在线节点才触发
+    NODE_COUNT_CHANGE_THRESHOLD: int = int(os.getenv("EXO_AUTO_TRIGGER_NODE_COUNT_CHANGE_THRESHOLD", "1"))   # 节点数变化超过此值才触发
+    MEMORY_CHANGE_RATIO: float = float(os.getenv("EXO_AUTO_TRIGGER_MEMORY_CHANGE_RATIO", "0.20"))      # 显存变化超过20%才触发
 
     # 防抖保护
-    COOLDOWN_SECONDS: int = 300            # 冷却期：5分钟内不重复触发
-    MIN_INTERVAL_SECONDS: int = 60         # 最小间隔：60秒
+    COOLDOWN_SECONDS: int = int(os.getenv("EXO_AUTO_TRIGGER_COOLDOWN_SECONDS", "300"))            # 冷却期：5分钟内不重复触发
+    MIN_INTERVAL_SECONDS: int = int(os.getenv("EXO_AUTO_TRIGGER_MIN_INTERVAL_SECONDS", "60"))         # 最小间隔：60秒
 
     # 分配策略
-    DEFAULT_STRATEGY: str = "uniform"  # 默认使用均匀分配模式
-    AUTO_EXECUTE: bool = True             # 是否自动执行（还是只生成方案）
+    DEFAULT_STRATEGY: str = os.getenv("EXO_AUTO_TRIGGER_DEFAULT_STRATEGY", "uniform")  # 默认使用均匀分配模式
+    AUTO_EXECUTE: bool = _env_bool("EXO_AUTO_TRIGGER_AUTO_EXECUTE", True)             # 是否自动执行（还是只生成方案）
 
     # 启动行为
-    AUTO_INIT_ON_STARTUP: bool = True     # 启动时是否自动初始化
-    STARTUP_DELAY_SECONDS: int = 30       # 启动后延迟30秒再初始化（等待节点连接）
+    AUTO_INIT_ON_STARTUP: bool = _env_bool("EXO_AUTO_TRIGGER_AUTO_INIT_ON_STARTUP", True)     # 启动时是否自动初始化
+    STARTUP_DELAY_SECONDS: int = int(os.getenv("EXO_AUTO_TRIGGER_STARTUP_DELAY_SECONDS", "30"))       # 启动后延迟30秒再初始化（等待节点连接）
 
     # ✅ 新增：加载确认机制（解决WS推送≠加载完成的问题）
     WAIT_FOR_CONFIRMATION: bool = True     # 是否等待模型真正加载完成再确认

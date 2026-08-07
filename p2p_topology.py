@@ -768,9 +768,18 @@ class P2PTopologyManager:
         Returns:
             可视化所需的节点和边数据
         """
+        # 从 Manager 同步最新节点状态，避免缓存中的状态过期
+        if self.manager:
+            for node_id, node in self.nodes.items():
+                manager_node = self.manager.nodes.get(node_id)
+                if manager_node:
+                    node.status = manager_node.status.value
+                    node.device_capabilities = manager_node.device_info or node.device_capabilities
+                    node.loaded_shards = manager_node.loaded_models
+
         nodes_viz = []
         edges_viz = []
-        
+
         # 准备节点数据
         for idx, (node_id, node) in enumerate(self.nodes.items()):
             # 根据角色/状态确定颜色
@@ -800,16 +809,25 @@ class P2PTopologyManager:
         # 准备边数据
         seen_edges = set()
         for edge in self.edges:
+            # 跳过端点不在当前节点列表中的过期边
+            from_node = self.nodes.get(edge.from_node)
+            to_node = self.nodes.get(edge.to_node)
+            if not from_node or not to_node:
+                continue
+
             # 避免重复（双向边只显示一次）
             edge_key = tuple(sorted([edge.from_node, edge.to_node]))
             if edge_key in seen_edges:
                 continue
             seen_edges.add(edge_key)
-            
+
+            # 根据两端节点状态确定边是否活跃
+            is_active = edge.is_active and from_node.status == 'online' and to_node.status == 'online'
+
             # 样式
-            width = 2 if edge.is_active else 1
-            dashes = not edge.is_active
-            color = "#94a3b8" if edge.is_active else "#cbd5e1"
+            width = 2 if is_active else 1
+            dashes = not is_active
+            color = "#94a3b8" if is_active else "#cbd5e1"
             
             # 推理链路高亮
             for pipeline in self.inference_pipelines.values():
